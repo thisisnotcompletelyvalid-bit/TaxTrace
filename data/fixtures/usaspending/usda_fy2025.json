@@ -1,0 +1,87 @@
+{
+  "fixture_notice": "Compact deterministic USAspending-shaped fixture for parser/integration tests. Amounts are test data, not a substitute for live ingestion.",
+  "toptier_agencies": {
+    "results": [
+      {
+        "toptier_code": "012",
+        "agency_name": "Department of Agriculture",
+        "abbreviation": "USDA",
+        "agency_slug": "department-of-agriculture"
+      }
+    ]
+  },
+  "012:federal_account": {
+    "results": [
+      {
+        "code": "012-3505",
+        "name": "Supplemental Nutrition Assistance Program",
+        "obligated_amount": 100000000.0,
+        "gross_outlay_amount": 98000000.0,
+        "children": [
+          {
+            "code": "012-3505-000",
+            "name": "Supplemental Nutrition Assistance Program",
+            "obligated_amount": 100000000.0,
+            "gross_outlay_amount": 98000000.0
+          }
+        ]
+      }
+    ],
+    "page_metadata": {
+      "hasNext": false
+    }
+  },
+  "012:object_class": {
+    "results": [
+      {
+        "code": "41",
+        "name": "Grants, subsidies, and contributions",
+        "obligated_amount": 80000000.0,
+        "gross_outlay_amount": 79000000.0
+      },
+      {
+        "code": "25",
+        "name": "Other contractual services",
+        "obligated_amount": 20000000.0,
+        "gross_outlay_amount": 19000000.0
+      }
+    ],
+    "page_metadata": {
+      "hasNext": false
+    }
+  },
+  "012:program_activity": {
+    "results": [
+      {
+        "code": "001",
+        "name": "Nutrition Assistance",
+        "obligated_amount": 100000000.0,
+        "gross_outlay_amount": 98000000.0
+      }
+    ],
+    "page_metadata": {
+      "hasNext": false
+    }
+  },
+  "012:budget_function": {
+    "results": [
+      {
+        "code": "600",
+        "name": "Income Security",
+        "obligated_amount": 100000000.0,
+        "gross_outlay_amount": 98000000.0,
+        "children": [
+          {
+            "code": "605",
+            "name": "Food and Nutrition Assistance",
+            "obligated_amount": 100000000.0,
+            "gross_outlay_amount": 98000000.0
+          }
+        ]
+      }
+    ],
+    "page_metadata": {
+      "hasNext": false
+    }
+  }
+}

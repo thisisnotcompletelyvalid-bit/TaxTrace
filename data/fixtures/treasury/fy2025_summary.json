@@ -1,0 +1,168 @@
+{
+  "source_url": "https://fiscal.treasury.gov/reports-statements/combined-statement/",
+  "transcription_note": "Small checked-in fixture transcribed from Treasury FY2025 Combined Statement summary tables; source PDFs state values in millions of dollars. Values here are stored in dollars.",
+  "receipts": [
+    {
+      "code": "IIT",
+      "name": "Individual Income Taxes",
+      "amount_dollars": "2656044000000"
+    },
+    {
+      "code": "CIT",
+      "name": "Corporation Income Taxes",
+      "amount_dollars": "452089000000"
+    },
+    {
+      "code": "EMP",
+      "name": "Employment and General Retirement",
+      "amount_dollars": "1685632000000"
+    },
+    {
+      "code": "UI",
+      "name": "Unemployment Insurance",
+      "amount_dollars": "54049000000"
+    },
+    {
+      "code": "RET",
+      "name": "Other Retirement",
+      "amount_dollars": "8614000000"
+    },
+    {
+      "code": "SIT",
+      "name": "Total Social Insurance and Retirement Receipts",
+      "amount_dollars": "1748294000000"
+    },
+    {
+      "code": "EXC",
+      "name": "Excise Taxes",
+      "amount_dollars": "105937000000"
+    },
+    {
+      "code": "EST",
+      "name": "Estate and Gift Taxes",
+      "amount_dollars": "29462000000"
+    },
+    {
+      "code": "CUS",
+      "name": "Customs Duties",
+      "amount_dollars": "194866000000"
+    },
+    {
+      "code": "MISC",
+      "name": "Miscellaneous Receipts",
+      "amount_dollars": "47925000000"
+    },
+    {
+      "code": "OTHER",
+      "name": "Total Other Receipts",
+      "amount_dollars": "272252000000"
+    },
+    {
+      "code": "TOTAL",
+      "name": "Total Receipts",
+      "amount_dollars": "5234617000000"
+    }
+  ],
+  "outlays": [
+    {
+      "code": "050",
+      "name": "National Defense",
+      "amount_dollars": "916649000000"
+    },
+    {
+      "code": "150",
+      "name": "International Affairs",
+      "amount_dollars": "45170000000"
+    },
+    {
+      "code": "250",
+      "name": "General Science, Space, and Technology",
+      "amount_dollars": "42084000000"
+    },
+    {
+      "code": "270",
+      "name": "Energy",
+      "amount_dollars": "20892000000"
+    },
+    {
+      "code": "300",
+      "name": "Natural Resources and Environment",
+      "amount_dollars": "88312000000"
+    },
+    {
+      "code": "350",
+      "name": "Agriculture",
+      "amount_dollars": "49358000000"
+    },
+    {
+      "code": "370",
+      "name": "Commerce and Housing Credit",
+      "amount_dollars": "-28621000000"
+    },
+    {
+      "code": "400",
+      "name": "Transportation",
+      "amount_dollars": "145804000000"
+    },
+    {
+      "code": "450",
+      "name": "Community and Regional Development",
+      "amount_dollars": "84530000000"
+    },
+    {
+      "code": "500",
+      "name": "Education, Training, Employment, and Social Services",
+      "amount_dollars": "71014000000"
+    },
+    {
+      "code": "550",
+      "name": "Health",
+      "amount_dollars": "978878000000"
+    },
+    {
+      "code": "570",
+      "name": "Medicare",
+      "amount_dollars": "996719000000"
+    },
+    {
+      "code": "600",
+      "name": "Income Security",
+      "amount_dollars": "701584000000"
+    },
+    {
+      "code": "650",
+      "name": "Social Security",
+      "amount_dollars": "1580686000000"
+    },
+    {
+      "code": "700",
+      "name": "Veterans Benefits and Services",
+      "amount_dollars": "377162000000"
+    },
+    {
+      "code": "750",
+      "name": "Administration of Justice",
+      "amount_dollars": "85182000000"
+    },
+    {
+      "code": "800",
+      "name": "General Government",
+      "amount_dollars": "34454000000"
+    },
+    {
+      "code": "900",
+      "name": "Net Interest",
+      "amount_dollars": "970359000000"
+    },
+    {
+      "code": "950",
+      "name": "Undistributed Offsetting Receipts",
+      "amount_dollars": "-150225000000"
+    },
+    {
+      "code": "TOTAL",
+      "name": "Total Outlays",
+      "amount_dollars": "7009992000000"
+    }
+  ]
+}

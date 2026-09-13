@@ -1,0 +1,60 @@
+{
+  "tax_year": 2026,
+  "source": {
+    "irs_inflation_adjustments": "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill",
+    "irs_revenue_procedure": "https://www.irs.gov/irb/2025-45_IRB",
+    "irs_fica": "https://www.irs.gov/taxtopics/tc751",
+    "irs_child_tax_credit": "https://www.irs.gov/credits-deductions/individuals/child-tax-credit"
+  },
+  "standard_deduction": {
+    "single": "16100",
+    "married_filing_jointly": "32200",
+    "married_filing_separately": "16100",
+    "head_of_household": "24150"
+  },
+  "ordinary_income_brackets": {
+    "single": [
+      ["12400", "0.10"], ["50400", "0.12"], ["105700", "0.22"],
+      ["201775", "0.24"], ["256225", "0.32"], ["640600", "0.35"], [null, "0.37"]
+    ],
+    "married_filing_jointly": [
+      ["24800", "0.10"], ["100800", "0.12"], ["211400", "0.22"],
+      ["403550", "0.24"], ["512450", "0.32"], ["768700", "0.35"], [null, "0.37"]
+    ],
+    "married_filing_separately": [
+      ["12400", "0.10"], ["50400", "0.12"], ["105700", "0.22"],
+      ["201775", "0.24"], ["256225", "0.32"], ["384350", "0.35"], [null, "0.37"]
+    ],
+    "head_of_household": [
+      ["17700", "0.10"], ["67450", "0.12"], ["105700", "0.22"],
+      ["201750", "0.24"], ["256200", "0.32"], ["640600", "0.35"], [null, "0.37"]
+    ]
+  },
+  "fica": {
+    "social_security_employee_rate": "0.062",
+    "social_security_wage_base": "184500",
+    "medicare_employee_rate": "0.0145",
+    "additional_medicare_rate": "0.009",
+    "additional_medicare_threshold": {
+      "single": "200000",
+      "married_filing_jointly": "250000",
+      "married_filing_separately": "125000",
+      "head_of_household": "200000"
+    }
+  },
+  "dependent_credits": {
+    "child_tax_credit_per_child": "2200",
+    "additional_child_tax_credit_max_per_child": "1700",
+    "additional_child_tax_credit_earned_income_floor": "2500",
+    "additional_child_tax_credit_rate": "0.15",
+    "other_dependent_credit_per_dependent": "500",
+    "phaseout_threshold": {
+      "single": "200000",
+      "married_filing_jointly": "400000",
+      "married_filing_separately": "200000",
+      "head_of_household": "200000"
+    },
+    "phaseout_increment": "1000",
+    "phaseout_reduction_per_increment": "50"
+  }
+}

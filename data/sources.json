@@ -1,0 +1,37 @@
+{
+  "registry_version": "1.0.0",
+  "sources": [
+    {
+      "id": "irs-2026-tax-parameters",
+      "kind": "IRS",
+      "role": "tax_rules",
+      "urls": [
+        "https://www.irs.gov/newsroom/irs-releases-tax-inflation-adjustments-for-tax-year-2026-including-amendments-from-the-one-big-beautiful-bill",
+        "https://www.irs.gov/irb/2025-45_IRB",
+        "https://www.irs.gov/taxtopics/tc751",
+        "https://www.irs.gov/credits-deductions/individuals/child-tax-credit"
+      ]
+    },
+    {
+      "id": "treasury-combined-statement",
+      "kind": "TREASURY",
+      "role": "aggregate_actual_control",
+      "url_pattern": "https://fiscal.treasury.gov/system/files/files/reports-statements/combined-statement/cs{year}/{receipt|outlay}.xlsx"
+    },
+    {
+      "id": "omb-public-budget-database-fy2027-edition",
+      "kind": "OMB",
+      "role": "account_receipt_outlay_detail",
+      "outlays_url": "https://www.whitehouse.gov/wp-content/uploads/2026/04/outlays_fy2027.xlsx",
+      "receipts_url": "https://www.whitehouse.gov/wp-content/uploads/2026/04/receipts_fy2027.xlsx",
+      "units": "thousands_of_dollars",
+      "actual_through_year": 2025
+    },
+    {
+      "id": "usaspending-v2",
+      "kind": "USASPENDING",
+      "role": "agency_account_program_object_function_dimensions",
+      "api_root": "https://api.usaspending.gov/api/v2"
+    }
+  ]
+}
