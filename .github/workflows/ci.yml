@@ -37,3 +37,99 @@ jobs:
       - run: npm run build
         env:
           NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+
+  no-docker-e2e:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: sqlite:///./e2e-taxtrace.db
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -U pip
+      - run: pip install -e '.[dev]'
+      - name: Bootstrap fresh SQLite warehouse
+        run: |
+          alembic upgrade head
+          taxtrace warehouse seed
+          taxtrace warehouse ingest-fixtures
+          taxtrace warehouse reconcile --fiscal-year 2025
+      - name: Start API
+        run: |
+          uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000 > /tmp/taxtrace-api.log 2>&1 &
+          echo $! > /tmp/taxtrace-api.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8000/health > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/taxtrace-api.log
+          exit 1
+      - name: Exercise API and browser CORS
+        run: |
+          python - <<'PY'
+          import httpx
+
+          base = "http://127.0.0.1:8000"
+          health = httpx.get(f"{base}/health")
+          health.raise_for_status()
+
+          status = httpx.get(f"{base}/v1/warehouse/status")
+          status.raise_for_status()
+          data = status.json()
+          assert data["source_snapshots"] == 8, data
+          assert data["spend_facts"] == 18, data
+          assert data["agencies"] == 5, data
+          assert data["treasury_aggregate_rows"] == 32, data
+
+          result = httpx.post(
+              f"{base}/v1/tax/federal",
+              json={
+                  "tax_year": 2026,
+                  "filing_status": "single",
+                  "wage_income": "50000",
+                  "spouse_wage_income": "0",
+                  "qualifying_children_under_17": 0,
+                  "other_dependents": 0,
+              },
+          )
+          result.raise_for_status()
+          assert result.json()["total_personal_tax_liability"] == "7645.00", result.text
+
+          cors = httpx.options(
+              f"{base}/v1/tax/federal",
+              headers={
+                  "Origin": "http://localhost:3000",
+                  "Access-Control-Request-Method": "POST",
+              },
+          )
+          cors.raise_for_status()
+          assert cors.headers.get("access-control-allow-origin") == "http://localhost:3000", cors.headers
+          PY
+      - name: Build web app
+        working-directory: apps/web
+        run: |
+          npm install
+          npm run build
+      - name: Start and smoke-test web app
+        working-directory: apps/web
+        run: |
+          npm run start -- -H 127.0.0.1 -p 3000 > /tmp/taxtrace-web.log 2>&1 &
+          echo $! > /tmp/taxtrace-web.pid
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000 > /tmp/taxtrace-home.html; then
+              break
+            fi
+            sleep 1
+          done
+          if ! grep -q "Auditable federal tax and finance foundation" /tmp/taxtrace-home.html; then
+            cat /tmp/taxtrace-web.log
+            exit 1
+          fi
