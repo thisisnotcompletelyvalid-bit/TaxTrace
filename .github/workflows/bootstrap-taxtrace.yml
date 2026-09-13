@@ -1,4 +1,4 @@
-name: Bootstrap TaxTrace source tree
+name: Bootstrap and verify TaxTrace phases 0-3
 
 on:
   push:
@@ -10,22 +10,22 @@ permissions:
   contents: write
 
 jobs:
-  extract-and-commit:
+  bootstrap-and-verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Reconstruct and verify Phase 0-3 archive
+      - name: Reconstruct and verify source archive
         shell: bash
         run: |
           set -euo pipefail
-          test -f bootstrap/part00.b64
-          test -f bootstrap/part13.b64
-          cat bootstrap/part*.b64 | base64 --decode > taxtrace-phases-0-3.zip
-          echo 'd2faf36a64a82024ddf860cfbd07b917e3c2d0ec1db169819186c40c16dc0406  taxtrace-phases-0-3.zip' | sha256sum --check --strict
-          unzip -tq taxtrace-phases-0-3.zip
+          count=$(find bootstrap -maxdepth 1 -name 'part*.b64' -type f | wc -l)
+          test "$count" -eq 14
+          cat $(printf 'bootstrap/part%02d.b64 ' {0..13}) | base64 -d > /tmp/taxtrace-phases-0-3.zip
+          echo 'd2faf36a64a82024ddf860cfbd07b917e3c2d0ec1db169819186c40c16dc0406  /tmp/taxtrace-phases-0-3.zip' | sha256sum --check --strict
+          unzip -tq /tmp/taxtrace-phases-0-3.zip
 
       - name: Extract complete repository
         shell: bash
@@ -33,12 +33,12 @@ jobs:
           set -euo pipefail
           rm -rf .bootstrap-extract
           mkdir .bootstrap-extract
-          unzip -q taxtrace-phases-0-3.zip -d .bootstrap-extract
+          unzip -q /tmp/taxtrace-phases-0-3.zip -d .bootstrap-extract
           test -d .bootstrap-extract/taxtrace-phases-0-3
           rsync -a --exclude='.github/workflows/ci.yml' .bootstrap-extract/taxtrace-phases-0-3/ ./
-          rm -rf .bootstrap-extract taxtrace-phases-0-3.zip bootstrap
+          rm -rf .bootstrap-extract bootstrap
 
-      - name: Commit extracted repository
+      - name: Commit clean extracted source tree
         shell: bash
         run: |
           set -euo pipefail
@@ -47,3 +47,52 @@ jobs:
           git add -A
           git commit -m 'Extract complete TaxTrace phases 0-3'
           git push origin HEAD:main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install -U pip
+          pip install -e '.[dev]'
+
+      - name: Lint and compile Python
+        run: |
+          ruff check src apps tests
+          python -m compileall -q src apps alembic
+
+      - name: Run Python test suite
+        run: pytest
+
+      - name: Run fresh database migration
+        env:
+          DATABASE_URL: sqlite:///./ci-taxtrace.db
+        run: alembic upgrade head
+
+      - name: Exercise warehouse fixtures and reconciliation
+        env:
+          DATABASE_URL: sqlite:///./ci-taxtrace.db
+        run: |
+          taxtrace warehouse seed
+          taxtrace warehouse ingest-fixtures
+          taxtrace warehouse status
+          taxtrace warehouse reconcile --fiscal-year 2025
+
+      - name: Exercise federal tax CLI
+        run: taxtrace tax federal --income 50000 --filing-status single
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm install
+
+      - name: Build Next.js frontend
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+        run: npm run build
