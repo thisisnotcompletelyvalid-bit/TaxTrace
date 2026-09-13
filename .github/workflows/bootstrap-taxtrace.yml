@@ -3,7 +3,6 @@ name: Bootstrap TaxTrace source tree
 on:
   push:
     paths:
-      - 'bootstrap/**'
       - '.github/workflows/bootstrap-taxtrace.yml'
   workflow_dispatch:
 
@@ -36,9 +35,8 @@ jobs:
           mkdir .bootstrap-extract
           unzip -q taxtrace-phases-0-3.zip -d .bootstrap-extract
           test -d .bootstrap-extract/taxtrace-phases-0-3
-          rsync -a .bootstrap-extract/taxtrace-phases-0-3/ ./
+          rsync -a --exclude='.github/workflows/ci.yml' .bootstrap-extract/taxtrace-phases-0-3/ ./
           rm -rf .bootstrap-extract taxtrace-phases-0-3.zip bootstrap
-          rm -f .github/workflows/bootstrap-taxtrace.yml
 
       - name: Commit extracted repository
         shell: bash
