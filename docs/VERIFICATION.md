@@ -43,6 +43,10 @@ The GitHub-connected chat re-extracted the Phase 0–3 archive and reran the rep
 
 This connected-chat verification also confirmed that the GitHub repository contains the Phase 0–3 source tree and deterministic binary fixtures; representative Git blob SHAs match the extracted archive exactly.
 
+## Fresh GitHub Actions execution
+
+A fresh CI execution was requested from the connected chat on 2026-09-13 so GitHub would rerun the Python and web jobs against the current `main` branch.
+
 ## Not executable in the generation environment
 
 Outbound package/file downloads and Docker are disabled in the execution container. Therefore the following were not executed locally here:
