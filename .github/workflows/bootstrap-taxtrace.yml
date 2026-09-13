@@ -1,0 +1,45 @@
+name: Bootstrap TaxTrace source tree
+
+on:
+  push:
+    paths:
+      - 'taxtrace-phases-0-3.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract-and-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Extract verified Phase 0-3 source archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f taxtrace-phases-0-3.zip ]; then
+            echo "Archive already extracted; nothing to do."
+            exit 0
+          fi
+          rm -rf .bootstrap-extract
+          mkdir .bootstrap-extract
+          unzip -q taxtrace-phases-0-3.zip -d .bootstrap-extract
+          test -d .bootstrap-extract/taxtrace-phases-0-3
+          rsync -a .bootstrap-extract/taxtrace-phases-0-3/ ./
+          rm -rf .bootstrap-extract taxtrace-phases-0-3.zip
+      - name: Commit extracted repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          git commit -m "Extract complete TaxTrace phases 0-3"
+          git push origin HEAD:main
