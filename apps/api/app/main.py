@@ -7,6 +7,7 @@ from fastapi.responses import RedirectResponse
 from apps.api.app.routers import (
     data_v2,
     explorer,
+    explorer_v2,
     health,
     methodology,
     receipt,
@@ -44,3 +45,4 @@ app.include_router(warehouse.router, prefix="/v1")
 app.include_router(methodology.router, prefix="/v1")
 app.include_router(data_v2.router, prefix="/v2")
 app.include_router(receipt_v2.router, prefix="/v2")
+app.include_router(explorer_v2.router, prefix="/v2")
