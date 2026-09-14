@@ -1,7 +1,7 @@
 # TaxTrace methodology specification
 
-Methodology version: **1.1.0**
-Status: governing specification for implemented phases 0–6
+Methodology version: **1.3.0**
+Status: governing specification for implemented phases 0–9A and Federal Product V2
 
 ## 1. Headline definition
 
@@ -15,7 +15,7 @@ That definition is the core semantic contract of the project.
 An amount derived deterministically from user-supplied facts and codified tax law within the supported scope.
 
 ### MODELED
-An amount inferred statistically because the user's actual taxable base is not known. Future sales-tax estimates are the primary example.
+An amount inferred statistically because the user's actual taxable base is not known. Sales-tax estimates are the primary implemented example.
 
 ### DIRECT
 A revenue-to-pool relationship that is legally or accounting-wise restricted. "Direct" does not mean a serial-numbered dollar is followed through bank accounts; it means the allocation domain is restricted by the financing structure.
@@ -105,7 +105,7 @@ A complete additive partition must satisfy:
 
 `sum_j A_j = sum_p C_p`.
 
-The Phase 4 receipt engine enforces this invariant for every pool and for the complete purpose receipt. Cent rounding is reconciled so displayed children equal the displayed parent.
+The receipt engine enforces this invariant for every pool and for the complete purpose receipt. Cent rounding is reconciled so displayed children equal the displayed parent.
 
 ## 7. Deficits and borrowing
 
@@ -137,7 +137,7 @@ For OMB's FY2027 Public Budget Database, the source guide states that 2025 and e
 
 ## 11. Fiscal-year versus tax-year alignment
 
-A user's tax year and the latest completed spending fiscal year may differ. Every future receipt must carry both. The system must never manufacture a completed spending year simply to match the user's tax year.
+A user's tax year and the latest completed spending fiscal year may differ. Every receipt must carry both. The system must never manufacture a completed spending year simply to match the user's tax year.
 
 ## 12. Classification dimensions and non-additivity
 
@@ -148,11 +148,12 @@ Federal spending may simultaneously be classified by:
 - federal account/Treasury account;
 - program activity;
 - object class;
-- award and recipient.
+- award and recipient;
+- subaward and subrecipient.
 
 These describe overlapping views of spending. TaxTrace stores them as distinct warehouse scopes. Amounts from different scopes cannot be summed unless a specific mapping proves they form a mutually exclusive partition.
 
-USAspending facts in this repository therefore include `record_scope`, such as `usaspending_object_class` or `usaspending_budget_function`.
+The same principle applies to state and local dimensions such as fund, department, function, object, vendor, project, and native finance item code.
 
 ## 13. Source hierarchy and provenance
 
@@ -164,20 +165,20 @@ Preferred evidence order:
 4. standardized official statistical sources;
 5. secondary sources for interpretation only unless no primary data exist and the limitation is explicit.
 
-Every imported external object is backed by an immutable `SourceSnapshot` containing source URL, retrieval timestamp, reference period, SHA-256 digest, original filename, parser version, and local archived path.
+Every imported external object is backed by immutable source or release metadata containing enough information to identify the source, reference period, retrieval or ingestion event, parser/materializer, and stored bytes or object identity.
 
-A revision creates a new snapshot; it does not mutate the bytes of an old snapshot.
+A revision creates a new source snapshot or dataset release; it does not silently mutate the evidentiary basis of an old calculation.
 
 ## 14. Federal source roles
 
-### U.S. Treasury Combined Statement
-Used as the authoritative completed-year aggregate receipts/outlays control source. Treasury describes the Combined Statement as the official publication of receipts and outlays.
+### U.S. Treasury
+Used for authoritative federal aggregate receipt/outlay control information.
 
 ### OMB Public Budget Database
-Used for account/bureau/subfunction outlay and receipt detail. The FY2027 user guide documents its positional schema and reports amounts in thousands of dollars; the parser converts them to dollars.
+Used for the controlling federal account and function actual-outlay base for the personalized federal receipt. OMB remains the additive parent when deeper USAspending dimensions are displayed.
 
-### USAspending
-Used for federal agency/account, Treasury account, program-activity, object-class, budget-function/subfunction, award, and recipient detail. These dimensions are maintained as overlapping views, not added together.
+### USAspending / DATA Act files
+Used for deeper federal account, program-activity, object-class, award, recipient, transaction, subaward, and subrecipient detail. File A, File B, File C, D1, D2, and File F preserve their native grains and are not six additive piles of spending.
 
 ## 15. Reconciliation
 
@@ -191,7 +192,7 @@ The repository's initial reconciliation policy is:
 
 These thresholds are operational defaults, not a claim that all source pairs ought to match exactly. Every reconciliation result stores both values, absolute difference, relative difference, status, and metadata.
 
-A failed or ambiguous reconciliation should block publication of a dependent public number until reviewed.
+A failed or ambiguous reconciliation should block publication of a dependent public number until reviewed. Some V2 detail relationships use stricter semantic gates rather than the generic percentage thresholds; those rules are specified below.
 
 ## 16. Monetary precision and rounding
 
@@ -203,7 +204,7 @@ Calculations retain precision internally. Additive receipt/explorer views use a 
 
 A methodological confidence grade is not a statistical confidence interval.
 
-Planned confidence semantics:
+Current confidence semantics are:
 
 - **A** — statutory calculation plus high-quality actual expenditure and direct financing relationship;
 - **B** — statutory calculation plus high-quality actual expenditure and proportional general-pool attribution;
@@ -211,27 +212,33 @@ Planned confidence semantics:
 - **D** — multiple material modeling assumptions or incomplete funding separation;
 - **N/A** — insufficient data.
 
-When a future statistical model can estimate prediction uncertainty, that interval should be reported separately.
+When a statistical model can estimate prediction uncertainty, that interval should be reported separately.
 
 ## 18. Refusal rule
 
-Specificity ends where evidence ends. If public accounting supports an agency total but not a particular covert or internal activity, TaxTrace must return insufficient data rather than invent a line-item estimate.
+Specificity ends where evidence ends. If the available source cannot support a child allocation safely, TaxTrace returns an explicit residual, unavailable status, or non-additive reference instead of inventing a precise line item.
 
-## 19. Machine-enforced invariants present in phases 0–6
+## 19. Machine-enforced invariants
+
+Implemented invariants include:
 
 - active revenue-to-pool shares sum to 1;
 - money is represented with decimals;
-- source bytes receive immutable content hashes;
-- actual/proposed status is attached to imported OMB records;
-- overlapping USAspending dimensions receive distinct scopes;
+- source bytes or lake objects retain immutable provenance/content identity;
+- actual/proposed status is attached to imported records where applicable;
+- overlapping dimensions retain distinct grains/scopes;
 - reconciliation differences are retained explicitly;
-- tax-to-pool, pool-to-child, top-level receipt, and explorer-scope conservation are enforced;
-- tax rules are versioned by tax year rather than embedded as timeless constants.
+- tax-to-pool, pool-to-child, top-level receipt, account-detail, jurisdictional, and explorer-scope conservation are enforced where a view is additive;
+- tax rules are versioned by tax year rather than embedded as timeless constants;
+- partial-period federal bulk releases cannot silently stand in for full-year personalized allocation;
+- cross-grain award relationships require canonical identity collapse before enrichment;
+- File F subawards cannot be added beside their prime awards as additional federal spending.
 
 ## 20. Methodology change policy
 
-A change that alters the semantic meaning or numerical result of a published receipt requires a methodology-version change and an ADR/changelog entry. Historical calculations must retain enough version metadata to remain reproducible.
+A change that alters the semantic meaning or numerical result of a published receipt requires a methodology-version change and a changelog/documentation entry. Historical calculations must retain enough version metadata to remain reproducible.
 
+The authoritative version used by newly produced machine-readable receipts is centralized in `taxtrace.methodology.version.METHODOLOGY_VERSION`.
 
 ## 21. Operational pool-to-spending eligibility (methodology 1.1.0)
 
@@ -246,24 +253,137 @@ If an active pool has no matching actual expenditure facts, TaxTrace does not wi
 
 ## 22. Drill-down explorer methodology
 
-The Phase 5 explorer begins with the exact Phase 4 fact allocations and changes only how those facts are grouped or, for deeper USAspending dimensions, how a defensible parent scope is subdivided.
+The original Phase 5 explorer begins with the exact Phase 4 fact allocations and changes only how those facts are grouped or, for deeper dimensions, how a defensible parent scope is subdivided.
 
-OMB purpose, agency, and federal-account views are direct regroupings of the same allocated OMB account facts. Program-activity detail is used only when a USAspending federal account can be crosswalked by exact federal-account code. Object-class detail is crosswalked at agency level by native code or normalized agency name. Award detail is crosswalked through explicit `AwardAccountLink` records.
+OMB purpose, agency, and federal-account views are regroupings of the same allocated OMB account facts. When deeper data cover only part of a selected parent scope, the uncovered share must be returned as a residual node.
 
-When USAspending detail covers only part of a selected parent scope, the uncovered share is returned as a residual node. Therefore every explorer response is additive within itself:
+Therefore every additive explorer response must satisfy:
 
 `sum(view nodes including residual) = selected parent scope amount`.
 
-Explorer views are not additive across dimensions. Adding an agency view to a purpose view would double count the same underlying receipt.
+Explorer views are not additive across dimensions. Adding an agency view to a purpose view, or a File B view to a File C view, would double count the same underlying receipt.
 
 ## 23. Award/recipient semantics
 
-Awards are a detail classification, not an additional expenditure layer. Award amounts and reported award outlays are used only to subdivide a crosswalked parent receipt scope. They are never added on top of OMB outlays. Award searches may overlap each other, accounts, agencies, recipients, and program categories.
+Awards are a detail classification, not an additional expenditure layer. Reported award, transaction, and subaward amounts can describe or subdivide a defensible parent scope, but they are never added on top of the controlling OMB account attribution.
+
+Award and recipient searches may overlap each other, accounts, agencies, programs, and classifications. Search overlap never authorizes addition.
 
 ## 24. Search methodology
 
-Phase 6 maintains a separate portable search index over normalized finance entities. Search ranking uses canonical titles, descriptions, identifiers, aliases, abbreviations, curated synonyms, and approximate string similarity. The current portable implementation is designed to run on SQLite and PostgreSQL; a later OpenSearch-backed implementation may replace ranking without changing the public entity contract.
+Phase 6 maintains a separate portable search index over normalized finance entities. Search ranking uses canonical titles, descriptions, identifiers, aliases, abbreviations, curated synonyms, and approximate string similarity. The current portable implementation is designed to run on SQLite and PostgreSQL; a later Warehouse V2 search layer may replace ranking without changing the non-additive search contract.
 
 Search results are discovery/navigation results, not an additive partition. They are explicitly marked non-additive because the same spending can match multiple entities or concepts.
 
 Manual/curated aliases are stored separately from official names so TaxTrace never rewrites government-native source labels.
+
+## 25. Florida, Alachua, Gainesville, and modeled sales tax (methodology 1.2.0)
+
+Methodology 1.2.0 added the implemented state/local quick-mode rules in Phases 7, 8, and 9A.
+
+- Florida quick mode does not invent an individual wage-income tax where none is supported.
+- Because wages do not reveal actual taxable purchases, the quick-mode Florida and Alachua sales-tax liabilities are `MODELED`, not `CALCULATED`.
+- The model uses versioned BLS Consumer Expenditure Survey expenditure information and a TaxTrace taxability matrix rather than multiplying wages directly by a sales-tax rate.
+- Florida state sales tax is allocated across a mutually exclusive audited governmental-activity expenditure partition.
+- Alachua discretionary surtax remains in its dedicated legal-purpose pools rather than being blended into all county/city spending.
+- Florida and Alachua additive partitions conserve independently at displayed-cent precision.
+- Gainesville audited spending can be shown as an `ACTUAL` reference but is non-additive to the quick-mode personalized receipt unless a personal city tax or fee liability has been established.
+
+The detailed source and modeling assumptions remain documented in `docs/PHASE_7_8_9A.md`.
+
+## 26. Warehouse V2 federal account detail (methodology 1.3.0)
+
+Methodology 1.3.0 makes Warehouse V2 the operational deep-detail path for the personalized federal product while retaining OMB actual account outlays as the controlling additive parent.
+
+### 26.1 File B program-activity × object-class partition
+
+For a federal account with personalized OMB-controlled attribution `A_account`, TaxTrace may use full-year USAspending File B rows to partition that already-attributed amount into program-activity × object-class children.
+
+Let `B_i` be the signed File B FY-beginning-to-period-end outlay for child `i`, and let:
+
+`B_account = sum_i B_i`.
+
+When a safe full-year File B release is available and the denominator is usable, the raw child attribution is:
+
+`A_i = A_account * B_i / B_account`.
+
+Displayed children are deterministically cent-reconciled back to `A_account`.
+
+OMB and File B government outlay totals are displayed independently. They are never added together. A difference between them does not cause TaxTrace to replace the OMB parent silently.
+
+For the current USAspending account-download path, a release is treated as full-year for personalization only when stored request provenance proves reporting period `12`. Missing local Parquet objects, unknown/partial periods, zero denominators, or unsupported schemas produce explicit detail-unavailable residuals rather than guessed children.
+
+### 26.2 File C award-financial projection
+
+File C is **not** assumed to describe 100% of an OMB account. It is award-financial activity, so normalizing File C identities directly to the full personalized account would falsely classify non-award or uncovered account activity as awards.
+
+TaxTrace therefore uses the matching full-year File B account outlay as the USAspending denominator and File C outlay as the award-financial numerator.
+
+Let:
+
+- `A_account` = personalized OMB-controlled account attribution;
+- `B_account` = full-year File B account outlay;
+- `C_account` = sum of eligible full-year File C award-financial outlays for the account.
+
+The File C award-share gate is:
+
+`R_award = C_account / B_account`.
+
+The current conservative projection requires:
+
+`B_account > 0`
+
+and
+
+`0 <= C_account <= B_account`.
+
+If those bounds are not satisfied, TaxTrace assigns **no** personalized dollars to File C awards for that account and leaves the complete parent as an explicit residual.
+
+When the bounds are satisfied:
+
+`A_award_pool = A_account * R_award`
+
+and
+
+`A_residual = A_account - A_award_pool`.
+
+File C rows are first collapsed to the canonical USAspending generated award identity. Repeated File C rows for the same award identity therefore contribute to one identity-level outlay before the personalized award pool is subdivided. Blank/unlinked File C activity is preserved in an explicit unlinked bucket rather than dropped or guessed.
+
+Identity child shares use the collapsed File C outlays within `C_account`, followed by deterministic cent reconciliation. The identity children plus the non-award/unreconciled residual must equal `A_account` exactly.
+
+### 26.3 D1/D2 prime transactions and File F subawards
+
+The canonical identity aliases are:
+
+```text
+File C: award_unique_key
+D1:     contract_award_unique_key
+D2:     assistance_award_unique_key
+File F: prime_award_unique_key
+```
+
+These identify relationships; they do not authorize a raw row-to-row join. File C and D1/D2 can each contain repeated rows for the same identity, so a naive join can create many-to-many fan-out and multiply monetary values.
+
+TaxTrace therefore collapses File C to the intended prime-award identity first, then queries D1/D2 independently by that identity for descriptive prime-award and recipient attributes. D1/D2 transaction counts, obligations, award totals, and other monetary fields do not create additional personalized dollars.
+
+File F is downstream of the prime award. Subaward amounts describe distribution within a prime award and are always non-additive to the personalized receipt. They have no independent personalized amount and must never be added beside the prime award as another federal expenditure.
+
+Federal Product V2 uses only a READY full-fiscal-year D1/D2/File F release for this full-year drilldown. Bounded validation slices remain valid source-validation evidence but do not masquerade as annual product coverage.
+
+### 26.4 Conservation across V2 views
+
+The following remain separate accounting views of the same underlying federal receipt:
+
+- OMB purpose/agency/account;
+- File B program activity × object class;
+- File C award-financial projection;
+- D1/D2 prime-award transaction attributes;
+- File F subaward/subrecipient detail.
+
+Only explicitly marked children within one additive partition may be summed. Cross-view addition is prohibited.
+
+The top-level Federal Receipt V2 must still satisfy:
+
+`sum(OMB-controlled account attributions) + explicit top-level residual = total allocable personal federal taxes`.
+
+Every File B account partition and every File C account award projection must independently conserve its personalized parent at displayed-cent precision.
