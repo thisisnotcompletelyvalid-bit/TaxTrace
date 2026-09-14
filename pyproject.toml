@@ -32,6 +32,7 @@ dev = [
 
 [project.scripts]
 taxtrace = "taxtrace.cli:app"
+taxtrace-api = "taxtrace.dev_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
