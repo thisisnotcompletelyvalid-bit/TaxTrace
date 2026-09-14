@@ -1,0 +1,39 @@
+name: Warehouse V2 Hotfix
+
+on:
+  push:
+    branches: [data-overhaul-v1]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: data-overhaul-v1
+      - name: Patch SQLAlchemy row mappings and self-remove
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/taxtrace/warehouse_v2/census.py')
+          text = path.read_text()
+          old_identifiers = '''    identifiers = dict(session.execute(select(GovernmentIdentifier.value, GovernmentIdentifier.jurisdiction_id).where(GovernmentIdentifier.scheme == "CENSUS_GOV_ID")))\n'''
+          new_identifiers = '''    identifiers = {\n        value: jurisdiction_id\n        for value, jurisdiction_id in session.execute(\n            select(GovernmentIdentifier.value, GovernmentIdentifier.jurisdiction_id).where(\n                GovernmentIdentifier.scheme == "CENSUS_GOV_ID"\n            )\n        )\n    }\n'''
+          old_classes = '''    classes = dict(session.execute(select(FinanceClassification.code, FinanceClassification.id).where(FinanceClassification.scheme == "CENSUS_GOV_FINANCE")))\n'''
+          new_classes = '''    classes = {\n        code: classification_id\n        for code, classification_id in session.execute(\n            select(FinanceClassification.code, FinanceClassification.id).where(\n                FinanceClassification.scheme == "CENSUS_GOV_FINANCE"\n            )\n        )\n    }\n'''
+          if text.count(old_identifiers) != 1 or text.count(old_classes) != 1:
+              raise SystemExit('Expected SQLAlchemy lookup expressions not found exactly once')
+          text = text.replace(old_identifiers, new_identifiers).replace(old_classes, new_classes)
+          path.write_text(text)
+          PY
+          rm .github/workflows/warehouse-v2-hotfix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/taxtrace/warehouse_v2/census.py .github/workflows/warehouse-v2-hotfix.yml
+          git commit -m "Fix warehouse v2 SQLAlchemy row mappings"
+          git push origin HEAD:data-overhaul-v1
