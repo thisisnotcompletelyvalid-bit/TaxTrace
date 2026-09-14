@@ -62,6 +62,56 @@ type Receipt = {
   };
 };
 
+type WarehouseCoverage = {
+  dataset_key: string;
+  release_key?: string | null;
+  fiscal_year: number;
+  status: string;
+  full_fiscal_year: boolean;
+  row_count?: number | null;
+  object_count: number;
+  notes: string[];
+};
+
+type WarehouseChild = {
+  key: string;
+  label: string;
+  node_type: string;
+  allocated_amount: string;
+  government_outlay?: string | null;
+  program_activity_code?: string | null;
+  program_activity_name?: string | null;
+  object_class_code?: string | null;
+  object_class_name?: string | null;
+  additive: boolean;
+  residual: boolean;
+  method: string;
+  notes: string[];
+};
+
+type WarehouseAccount = {
+  key: string;
+  account_code: string;
+  account_name: string;
+  allocated_amount: string;
+  omb_government_outlay: string;
+  file_b_government_outlay?: string | null;
+  children: WarehouseChild[];
+  conservation_difference: string;
+  warehouse_matched: boolean;
+  notes: string[];
+};
+
+type ReceiptV2 = {
+  base_receipt: Receipt;
+  warehouse: WarehouseCoverage;
+  accounts: WarehouseAccount[];
+  residual_amount: string;
+  additive_partition_total: string;
+  conservation_difference: string;
+  warnings: string[];
+};
+
 type ExplorerNode = {
   key: string;
   label: string;
@@ -87,6 +137,102 @@ type ExplorerResult = {
   warnings: string[];
 };
 
+type AwardCoverage = {
+  dataset_key: string;
+  release_key?: string | null;
+  fiscal_year: number;
+  status: string;
+  full_fiscal_year: boolean;
+  row_count?: number | null;
+  object_count: number;
+  notes: string[];
+};
+
+type AwardNode = {
+  key: string;
+  label: string;
+  node_type: string;
+  allocated_amount: string;
+  file_c_government_outlay?: string | null;
+  award_identity?: string | null;
+  award_family?: string | null;
+  recipient_name?: string | null;
+  recipient_uei?: string | null;
+  description?: string | null;
+  source_row_count: number;
+  linked: boolean;
+  residual: boolean;
+  additive_within_account: boolean;
+  method: string;
+  notes: string[];
+};
+
+type AccountAwardProjection = {
+  key: string;
+  account_code: string;
+  account_name: string;
+  allocated_amount: string;
+  file_b_government_outlay?: string | null;
+  file_c_government_outlay?: string | null;
+  file_c_share_of_file_b?: string | null;
+  children: AwardNode[];
+  conservation_difference: string;
+  projection_available: boolean;
+  notes: string[];
+};
+
+type AwardProjectionResult = {
+  receipt: ReceiptV2;
+  file_c: AwardCoverage;
+  accounts: AccountAwardProjection[];
+  warnings: string[];
+};
+
+type PrimeAwardSummary = {
+  award_identity: string;
+  award_family: string;
+  transaction_count: number;
+  award_id_piid?: string | null;
+  award_id_fain?: string | null;
+  award_id_uri?: string | null;
+  recipient_name?: string | null;
+  recipient_uei?: string | null;
+  description?: string | null;
+  awarding_agency_name?: string | null;
+  funding_agency_name?: string | null;
+  award_type?: string | null;
+  first_action_date?: string | null;
+  last_action_date?: string | null;
+  additive: boolean;
+  personalized_amount: null;
+  notes: string[];
+};
+
+type SubawardDetailNode = {
+  key: string;
+  prime_award_identity: string;
+  award_family: string;
+  subaward_number?: string | null;
+  subawardee_name?: string | null;
+  subawardee_uei?: string | null;
+  subaward_amount?: string | null;
+  description?: string | null;
+  action_date?: string | null;
+  additive: boolean;
+  personalized_amount: null;
+  notes: string[];
+};
+
+type AwardDetailResult = {
+  award_identity: string;
+  fiscal_year: number;
+  prime_coverage: AwardCoverage;
+  subaward_coverage: AwardCoverage;
+  prime?: PrimeAwardSummary | null;
+  subawards: SubawardDetailNode[];
+  warnings: string[];
+};
+
 type SearchResult = {
   entity_type: string;
   entity_key: string;
@@ -108,7 +254,7 @@ type SearchResult = {
 };
 
 const API = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
-const VIEWS = ["purpose", "agency", "account", "program_activity", "object_class", "award"] as const;
+const VIEWS = ["purpose", "agency", "account", "program_activity", "object_class"] as const;
 
 type View = (typeof VIEWS)[number];
 
@@ -123,12 +269,25 @@ function viewLabel(view: string) {
   return view.replaceAll("_", " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function percentage(value: string | null | undefined) {
+  if (value === null || value === undefined || value === "") return "—";
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return String(value);
+  return `${(parsed * 100).toFixed(1)}%`;
+}
+
 export default function Home() {
   const [income, setIncome] = useState("50000");
   const [filingStatus, setFilingStatus] = useState("single");
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receiptV2, setReceiptV2] = useState<ReceiptV2 | null>(null);
   const [explorer, setExplorer] = useState<ExplorerResult | null>(null);
   const [activeView, setActiveView] = useState<View>("purpose");
+  const [selectedWarehouseAccount, setSelectedWarehouseAccount] = useState<string | null>(null);
+  const [awardProjection, setAwardProjection] = useState<AwardProjectionResult | null>(null);
+  const [selectedAwardAccount, setSelectedAwardAccount] = useState<string | null>(null);
+  const [awardDetail, setAwardDetail] = useState<AwardDetailResult | null>(null);
+  const [awardLoading, setAwardLoading] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -154,17 +313,22 @@ export default function Home() {
     setError("");
     setLoading(true);
     try {
-      const response = await fetch(`${API}/v1/receipt/federal`, {
+      const response = await fetch(`${API}/v2/receipt/federal`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload)
       });
       if (!response.ok) throw new Error(await response.text());
-      const data: Receipt = await response.json();
-      setReceipt(data);
+      const data: ReceiptV2 = await response.json();
+      setReceiptV2(data);
+      setReceipt(data.base_receipt);
       setExplorer(null);
       setActiveView("purpose");
       setTrail([]);
+      setSelectedWarehouseAccount(null);
+      setAwardProjection(null);
+      setSelectedAwardAccount(null);
+      setAwardDetail(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -207,6 +371,45 @@ export default function Home() {
     }
   }
 
+  async function loadAwards() {
+    if (!receipt || awardProjection) return;
+    setAwardLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API}/v2/explorer/federal/awards`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data: AwardProjectionResult = await response.json();
+      setAwardProjection(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAwardLoading(false);
+    }
+  }
+
+  async function loadAwardDetail(identity: string) {
+    setAwardLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`${API}/v2/explorer/federal/award-detail`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ fiscal_year: payload.spending_fiscal_year, award_identity: identity })
+      });
+      if (!response.ok) throw new Error(await response.text());
+      const data: AwardDetailResult = await response.json();
+      setAwardDetail(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAwardLoading(false);
+    }
+  }
+
   async function runSearch(event: FormEvent) {
     event.preventDefault();
     if (!searchText.trim()) return;
@@ -233,21 +436,16 @@ export default function Home() {
   function openSearchResult(result: SearchResult) {
     if (!receipt || !result.suggested_view || !result.parent_type || !result.parent_key) return;
     if (!VIEWS.includes(result.suggested_view as View)) return;
-    loadExplorer(
-      result.suggested_view as View,
-      result.parent_type,
-      result.parent_key,
-      result.title
-    );
+    loadExplorer(result.suggested_view as View, result.parent_type, result.parent_key, result.title);
   }
 
   function downloadReceipt() {
-    if (!receipt) return;
-    const blob = new Blob([JSON.stringify(receipt, null, 2)], { type: "application/json" });
+    if (!receiptV2 || !receipt) return;
+    const blob = new Blob([JSON.stringify(receiptV2, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = `taxtrace-federal-receipt-2026-fy${receipt.spending_fiscal_year}.json`;
+    link.download = `taxtrace-federal-receipt-v2-2026-fy${receipt.spending_fiscal_year}.json`;
     link.click();
     URL.revokeObjectURL(url);
   }
@@ -255,16 +453,22 @@ export default function Home() {
   const displayedNodes: Array<ExplorerNode | ReceiptNode> = explorer
     ? explorer.nodes
     : receipt?.purpose || [];
+  const warehouseAccount = receiptV2?.accounts.find(
+    (account) => account.account_code === selectedWarehouseAccount
+  );
+  const awardAccount = awardProjection?.accounts.find(
+    (account) => account.account_code === selectedAwardAccount
+  );
 
   return (
     <main>
       <section className="hero">
-        <p className="eyebrow">TaxTrace · Phases 0–6</p>
+        <p className="eyebrow">TaxTrace · Federal Product V2</p>
         <h1>See the public-finance path behind your federal taxes.</h1>
         <p>
           TaxTrace calculates supported federal tax liability, routes each tax through its financing
-          pool, and attributes it to actual FY2025 outlays. General revenue is proportional allocation,
-          not literal dollar tracing. Every drill-down stays within an explicitly labeled accounting view.
+          pool, and attributes it to actual federal outlays. OMB controls the additive account receipt;
+          USAspending adds program, object, award, recipient, and subaward detail without double counting.
         </p>
       </section>
 
@@ -274,7 +478,7 @@ export default function Home() {
             <p className="eyebrow">Step 1</p>
             <h2>Calculate the receipt</h2>
           </div>
-          {receipt && <span className="status good">Conservation Δ {money(receipt.conservation_difference)}</span>}
+          {receiptV2 && <span className="status good">Conservation Δ {money(receiptV2.conservation_difference)}</span>}
         </div>
         <form className="tax-form" onSubmit={calculate}>
           <label>
@@ -315,7 +519,7 @@ export default function Home() {
                 </div>
               ))}
             </details>
-            <button className="secondary" type="button" onClick={downloadReceipt}>Download auditable receipt JSON</button>
+            <button className="secondary" type="button" onClick={downloadReceipt}>Download auditable V2 receipt JSON</button>
           </>
         )}
       </section>
@@ -324,8 +528,8 @@ export default function Home() {
         <section className="panel">
           <div className="section-head">
             <div>
-              <p className="eyebrow">Steps 2–3</p>
-              <h2>Explore the receipt</h2>
+              <p className="eyebrow">Core classifications</p>
+              <h2>Explore the conserved receipt</h2>
             </div>
             <span className="status">{explorer ? money(explorer.scope_amount) : money(receipt.total_allocable_taxes)} in scope</span>
           </div>
@@ -408,10 +612,194 @@ export default function Home() {
         </section>
       )}
 
+      {receiptV2 && (
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">Warehouse V2 · File B</p>
+              <h2>Federal accounts → program activity × object class</h2>
+            </div>
+            <span className={receiptV2.warehouse.status === "READY" ? "status good" : "status"}>
+              {receiptV2.warehouse.status}
+            </span>
+          </div>
+          <p className="notice">
+            OMB controls each account&apos;s personalized amount. File B only partitions that existing
+            amount into program/activity/object-class detail, so the OMB and USAspending government
+            totals shown here must not be added together.
+          </p>
+          {receiptV2.warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}
+          <div className="explorer-list">
+            {receiptV2.accounts.map((account) => (
+              <div className="explorer-row" key={account.key}>
+                <button
+                  className="row-main"
+                  type="button"
+                  onClick={() => setSelectedWarehouseAccount(
+                    selectedWarehouseAccount === account.account_code ? null : account.account_code
+                  )}
+                >
+                  <span className="row-title">{account.account_name}</span>
+                  <span className="meta">
+                    {account.account_code} · OMB actual {money(account.omb_government_outlay)} · File B {money(account.file_b_government_outlay)}
+                  </span>
+                </button>
+                <div className="row-amount">
+                  <strong>{money(account.allocated_amount)}</strong>
+                  <small>{account.warehouse_matched ? "open →" : "detail unavailable"}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {warehouseAccount && (
+            <div className="calc-block">
+              <h3>{warehouseAccount.account_name}</h3>
+              <p className="notice">Account conservation Δ {money(warehouseAccount.conservation_difference)}</p>
+              <div className="explorer-list">
+                {warehouseAccount.children.map((child) => (
+                  <div className="explorer-row" key={child.key}>
+                    <div className="row-main">
+                      <span className="row-title">{child.label}</span>
+                      <span className="meta">
+                        {child.residual ? "explicit residual" : "File B additive child"}
+                        {child.government_outlay !== null && child.government_outlay !== undefined ? ` · government outlay ${money(child.government_outlay)}` : ""}
+                      </span>
+                    </div>
+                    <div className="row-amount"><strong>{money(child.allocated_amount)}</strong></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {receiptV2 && (
+        <section className="panel">
+          <div className="section-head">
+            <div>
+              <p className="eyebrow">Warehouse V2 · Files C / D1 / D2 / F</p>
+              <h2>Award, recipient, and subaward drilldown</h2>
+            </div>
+            {awardProjection && (
+              <span className={awardProjection.file_c.status === "READY" ? "status good" : "status"}>
+                File C {awardProjection.file_c.status}
+              </span>
+            )}
+          </div>
+          <p className="notice">
+            File C can receive personalized award attribution only after reconciliation against the
+            full-year File B account denominator. D1/D2 and File F are descriptive relationship grains,
+            not extra spending.
+          </p>
+          {!awardProjection && (
+            <button type="button" onClick={loadAwards} disabled={awardLoading}>
+              {awardLoading ? "Loading award view…" : "Load conserved award view"}
+            </button>
+          )}
+          {awardProjection && (
+            <>
+              {awardProjection.warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}
+              <div className="explorer-list">
+                {awardProjection.accounts.map((account) => (
+                  <div className="explorer-row" key={account.key}>
+                    <button
+                      className="row-main"
+                      type="button"
+                      onClick={() => {
+                        setSelectedAwardAccount(
+                          selectedAwardAccount === account.account_code ? null : account.account_code
+                        );
+                        setAwardDetail(null);
+                      }}
+                    >
+                      <span className="row-title">{account.account_name}</span>
+                      <span className="meta">
+                        {account.account_code} · File C / File B {percentage(account.file_c_share_of_file_b)} · {account.projection_available ? "projected" : "residual only"}
+                      </span>
+                    </button>
+                    <div className="row-amount"><strong>{money(account.allocated_amount)}</strong><small>open →</small></div>
+                  </div>
+                ))}
+              </div>
+
+              {awardAccount && (
+                <div className="calc-block">
+                  <h3>{awardAccount.account_name}</h3>
+                  <p className="notice">Award-view conservation Δ {money(awardAccount.conservation_difference)}</p>
+                  <div className="explorer-list">
+                    {awardAccount.children.map((child) => (
+                      <div className="explorer-row" key={child.key}>
+                        <button
+                          className="row-main"
+                          type="button"
+                          disabled={!child.linked || !child.award_identity}
+                          onClick={() => child.award_identity && loadAwardDetail(child.award_identity)}
+                        >
+                          <span className="row-title">{child.label}</span>
+                          <span className="meta">
+                            {child.residual ? "explicit residual" : child.linked ? `${child.award_family || "award"} · collapsed identity` : "unlinked File C activity"}
+                            {child.file_c_government_outlay !== null && child.file_c_government_outlay !== undefined ? ` · File C outlay ${money(child.file_c_government_outlay)}` : ""}
+                          </span>
+                        </button>
+                        <div className="row-amount">
+                          <strong>{money(child.allocated_amount)}</strong>
+                          {child.linked && <small>award detail →</small>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {awardDetail && (
+                <div className="calc-block">
+                  <h3>Prime award identity: {awardDetail.award_identity}</h3>
+                  <p className="notice">
+                    D1/D2: {awardDetail.prime_coverage.status} · File F: {awardDetail.subaward_coverage.status}. These rows are non-additive and have no personalized amount.
+                  </p>
+                  {awardDetail.prime && (
+                    <div className="results compact">
+                      <div><span>Recipient</span><strong>{awardDetail.prime.recipient_name || "Unknown"}</strong></div>
+                      <div><span>Prime transactions</span><strong>{awardDetail.prime.transaction_count}</strong></div>
+                      <div><span>Award family</span><strong>{awardDetail.prime.award_family}</strong></div>
+                    </div>
+                  )}
+                  {awardDetail.prime?.description && <p>{awardDetail.prime.description}</p>}
+                  {awardDetail.subawards.length > 0 && (
+                    <>
+                      <h3>Subawards</h3>
+                      <div className="explorer-list">
+                        {awardDetail.subawards.map((subaward) => (
+                          <div className="explorer-row" key={subaward.key}>
+                            <div className="row-main">
+                              <span className="row-title">{subaward.subawardee_name || subaward.subaward_number || "Unnamed subaward"}</span>
+                              <span className="meta">
+                                {subaward.subaward_number || "no subaward number"} · non-additive downstream detail
+                              </span>
+                            </div>
+                            <div className="row-amount">
+                              <strong>{money(subaward.subaward_amount)}</strong>
+                              <small>government-reported subaward amount</small>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {awardDetail.warnings.map((warning) => <p className="notice" key={warning}>{warning}</p>)}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       <section className="panel">
         <div className="section-head">
           <div>
-            <p className="eyebrow">Phase 6</p>
+            <p className="eyebrow">Federal search · V1 index pending 0.6.5 migration</p>
             <h2>Search federal finance</h2>
           </div>
         </div>
@@ -441,7 +829,7 @@ export default function Home() {
                   </div>
                   <div className="search-actions">
                     <span className="score">{Number(result.score).toFixed(0)}</span>
-                    {receipt && result.suggested_view && result.parent_type && result.parent_key && (
+                    {receipt && result.suggested_view && result.parent_type && result.parent_key && VIEWS.includes(result.suggested_view as View) && (
                       <button type="button" className="mini" onClick={() => openSearchResult(result)}>Open →</button>
                     )}
                   </div>
@@ -457,9 +845,10 @@ export default function Home() {
         <p>
           <strong>DIRECT</strong> means the tax is restricted to a financing pool before allocation.
           <strong> ALLOCATED</strong> means fungible revenue is attributed proportionally to eligible actual outlays.
-          Search and alternate explorer dimensions describe the same underlying government spending in different ways and are not additive across views.
+          File B and File C are alternate detail views of the same parent account attribution. D1/D2 and File F describe award relationships and are not additional personalized spending.
         </p>
-        <p>Methodology and machine-readable API documentation: <code>http://localhost:8000/docs</code>.</p>
+        <p><a href="/florida">Open the Florida + Alachua + Gainesville receipt →</a></p>
+        <p>Methodology and machine-readable API documentation: <a href={`${API}/docs`}>{API}/docs</a>.</p>
       </section>
     </main>
   );
