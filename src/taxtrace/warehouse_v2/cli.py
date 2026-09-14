@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 import typer
@@ -25,6 +26,14 @@ from taxtrace.warehouse_v2.db_models import (
     FinanceClassification,
     GovernmentFinanceFact,
     GovernmentIdentifier,
+)
+from taxtrace.warehouse_v2.usaspending_award_lake import (
+    inspect_award_archive,
+    materialize_award_archive,
+)
+from taxtrace.warehouse_v2.usaspending_awards import (
+    materialize_requested_awards,
+    request_award_archive,
 )
 from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient, load_payload
 from taxtrace.warehouse_v2.usaspending_lake import (
@@ -257,10 +266,95 @@ def bootstrap_federal_accounts(
     typer.echo(json.dumps(result, indent=2))
 
 
+@app.command("inspect-usaspending-awards")
+def inspect_usaspending_awards(
+    file: Path = typer.Option(..., "--file", exists=True),
+) -> None:
+    members = inspect_award_archive(file)
+    typer.echo(
+        json.dumps(
+            [
+                {
+                    "member": member.member_name,
+                    "data_class": member.data_class,
+                    "dataset_key": member.dataset_key,
+                    "award_family": member.award_family,
+                    "columns": list(member.columns),
+                }
+                for member in members
+            ],
+            indent=2,
+        )
+    )
+
+
+@app.command("ingest-usaspending-awards")
+def ingest_usaspending_awards(
+    file: Path = typer.Option(..., "--file", exists=True),
+    fiscal_year: int = typer.Option(..., "--fiscal-year"),
+    request_json: Path | None = typer.Option(
+        None, "--request-json", exists=True, help="Optional exact USAspending request JSON"
+    ),
+) -> None:
+    request = json.loads(request_json.read_text()) if request_json else None
+    with SessionLocal() as session:
+        seed_catalog(session)
+        result = materialize_award_archive(
+            session,
+            file,
+            fiscal_year=fiscal_year,
+            request=request,
+        )
+    typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("bootstrap-federal-awards")
+def bootstrap_federal_awards(
+    fiscal_year: int = typer.Option(2025, "--fiscal-year"),
+    agency: str = typer.Option(
+        "all",
+        "--agency",
+        help="USAspending toptier agency ID, or 'all' for the whole federal government",
+    ),
+    include_prime_awards: bool = typer.Option(
+        True, "--prime-awards/--no-prime-awards"
+    ),
+    include_subawards: bool = typer.Option(True, "--subawards/--no-subawards"),
+    start_date: date | None = typer.Option(
+        None, "--start-date", help="Optional YYYY-MM-DD date within the fiscal year"
+    ),
+    end_date: date | None = typer.Option(
+        None, "--end-date", help="Optional YYYY-MM-DD date within the fiscal year"
+    ),
+    wait: bool = typer.Option(True, "--wait/--no-wait"),
+) -> None:
+    """Request USAspending D1/D2 prime awards and/or File F subawards."""
+    agency_value: int | str = int(agency) if agency.isdigit() else agency
+    result = request_award_archive(
+        fiscal_year,
+        agency=agency_value,
+        include_prime_awards=include_prime_awards,
+        include_subawards=include_subawards,
+        start_date=start_date,
+        end_date=end_date,
+        wait=wait,
+    )
+    if wait:
+        with SessionLocal() as session:
+            result["warehouse"] = materialize_requested_awards(
+                session,
+                result,
+                fiscal_year=fiscal_year,
+            )
+    typer.echo(json.dumps(result, indent=2))
+
+
 @app.command("usaspending-submit")
 def usaspending_submit(
     kind: str = typer.Option(
-        ..., "--kind", help="accounts, awards, search, contracts, assistance"
+        ...,
+        "--kind",
+        help="accounts, awards, bulk_awards, search, contracts, assistance",
     ),
     payload: Path = typer.Option(..., "--payload", exists=True, help="Exact USAspending JSON request"),
     wait: bool = typer.Option(False, "--wait"),
