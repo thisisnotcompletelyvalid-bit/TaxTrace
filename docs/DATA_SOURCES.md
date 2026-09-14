@@ -76,3 +76,15 @@ Every live download is archived under `data/raw/<source>/<period>/` with a conte
 - optional metadata.
 
 Do not edit files inside `data/raw` in place. Re-ingest to create a new snapshot.
+
+## Phase 5–6 USAspending detail
+
+TaxTrace 0.2.0 additionally uses current USAspending v2 endpoints for deeper, non-additive views:
+
+- agency federal-account, program-activity, object-class, and budget-function endpoints;
+- `/api/v2/agency/treasury_account/<TAS>/program_activity/` for Treasury-account→program-activity detail, linked back to its parent federal account;
+- `/api/v2/search/spending_by_award/` for optional account-filtered award/recipient detail.
+
+Award ingestion is opt-in for live USAspending runs (`--include-awards`) because it adds requests and award data is a detail classification rather than the authoritative top-level outlay control. The deterministic fixture bundle enables award/recipient tests offline.
+
+OMB actual account outlays remain the primary receipt allocation base. USAspending dimensions subdivide a defensibly crosswalked OMB parent scope and never increase the parent receipt amount.

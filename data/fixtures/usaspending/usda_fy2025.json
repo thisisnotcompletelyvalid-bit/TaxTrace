@@ -83,5 +83,60 @@
     "page_metadata": {
       "hasNext": false
     }
+  },
+  "tas:012-3505-000:program_activity": {
+    "results": [
+      {
+        "code": "001",
+        "name": "Nutrition Assistance",
+        "obligated_amount": 100000000.0,
+        "gross_outlay_amount": 98000000.0
+      }
+    ],
+    "page_metadata": {
+      "hasNext": false
+    }
+  },
+  "awards:012-3505": {
+    "spending_level": "awards",
+    "limit": 100,
+    "page_metadata": {
+      "page": 1,
+      "hasNext": false
+    },
+    "results": [
+      {
+        "internal_id": 1001,
+        "generated_internal_id": "ASST_NON_FIXTURE001",
+        "Award ID": "SNAP-FIXTURE-001",
+        "Recipient Name": "Florida Department of Children and Families",
+        "recipient_id": "fixture-recipient-fl",
+        "Recipient UEI": "FLFIXTUREUEI1",
+        "Award Amount": 60000000.0,
+        "Total Outlays": 59000000.0,
+        "Award Type": "Grant",
+        "Funding Agency": "Department of Agriculture",
+        "Funding Agency Code": "012",
+        "Awarding Agency": "Department of Agriculture",
+        "Awarding Agency Code": "012",
+        "Description": "Fixture SNAP nutrition assistance grant to Florida."
+      },
+      {
+        "internal_id": 1002,
+        "generated_internal_id": "ASST_NON_FIXTURE002",
+        "Award ID": "SNAP-FIXTURE-002",
+        "Recipient Name": "Georgia Department of Human Services",
+        "recipient_id": "fixture-recipient-ga",
+        "Recipient UEI": "GAFIXTUREUEI2",
+        "Award Amount": 40000000.0,
+        "Total Outlays": 39000000.0,
+        "Award Type": "Grant",
+        "Funding Agency": "Department of Agriculture",
+        "Funding Agency Code": "012",
+        "Awarding Agency": "Department of Agriculture",
+        "Awarding Agency Code": "012",
+        "Description": "Fixture SNAP nutrition assistance grant to Georgia."
+      }
+    ]
   }
 }

@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "TaxTrace Foundation",
-  description: "Phases 0–3: federal tax engine and finance warehouse"
+  title: "TaxTrace",
+  description: "Auditable federal tax receipt, drill-down explorer, and public-finance search"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

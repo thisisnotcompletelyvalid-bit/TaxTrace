@@ -19,6 +19,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from taxtrace.database import Base
 from taxtrace.enums import (
+    AllocationRelation,
+    ConfidenceGrade,
     DataStatus,
     FinancialMetric,
     JurisdictionLevel,
@@ -268,3 +270,103 @@ class ReconciliationResult(Base):
     relative_difference: Mapped[Decimal | None] = mapped_column(RATIO, nullable=True)
     status: Mapped[str] = mapped_column(String(32))
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PoolSpendRule(Base):
+    __tablename__ = "pool_spend_rule"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    funding_pool_id: Mapped[int] = mapped_column(ForeignKey("funding_pool.id"), index=True)
+    source_scope: Mapped[str] = mapped_column(String(64), default="omb_account_outlay")
+    include_subfunction_codes: Mapped[list] = mapped_column(JSON, default=list)
+    exclude_subfunction_codes: Mapped[list] = mapped_column(JSON, default=list)
+    relation: Mapped[AllocationRelation] = mapped_column(Enum(AllocationRelation))
+    confidence: Mapped[ConfidenceGrade] = mapped_column(Enum(ConfidenceGrade))
+    effective_start_year: Mapped[int] = mapped_column(Integer)
+    effective_end_year: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    description: Mapped[str] = mapped_column(Text)
+    __table_args__ = (
+        UniqueConstraint(
+            "funding_pool_id",
+            "source_scope",
+            "effective_start_year",
+            name="uq_pool_spend_rule_pool_scope_start",
+        ),
+    )
+
+
+class Recipient(Base):
+    __tablename__ = "recipient"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_kind: Mapped[SourceKind] = mapped_column(Enum(SourceKind), index=True)
+    native_id: Mapped[str] = mapped_column(String(255), index=True)
+    name: Mapped[str] = mapped_column(String(512), index=True)
+    uei: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    __table_args__ = (UniqueConstraint("source_kind", "native_id", name="uq_recipient_source_native"),)
+
+
+class Award(Base):
+    __tablename__ = "award"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_kind: Mapped[SourceKind] = mapped_column(Enum(SourceKind), index=True)
+    native_id: Mapped[str] = mapped_column(String(255), index=True)
+    generated_internal_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    fiscal_year: Mapped[int] = mapped_column(Integer, index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    award_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    outlay_amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    agency_id: Mapped[int | None] = mapped_column(ForeignKey("agency.id"), nullable=True, index=True)
+    recipient_id: Mapped[int | None] = mapped_column(ForeignKey("recipient.id"), nullable=True, index=True)
+    source_snapshot_id: Mapped[int] = mapped_column(ForeignKey("source_snapshot.id"), index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    __table_args__ = (UniqueConstraint("source_kind", "native_id", "fiscal_year", name="uq_award_source_native_year"),)
+
+
+class AwardAccountLink(Base):
+    __tablename__ = "award_account_link"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    award_id: Mapped[int] = mapped_column(ForeignKey("award.id"), index=True)
+    federal_account_id: Mapped[int] = mapped_column(ForeignKey("federal_account.id"), index=True)
+    amount: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    __table_args__ = (UniqueConstraint("award_id", "federal_account_id", name="uq_award_account"),)
+
+
+class CanonicalCategory(Base):
+    __tablename__ = "canonical_category"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+
+
+class SearchAlias(Base):
+    __tablename__ = "search_alias"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(64), index=True)
+    entity_key: Mapped[str] = mapped_column(String(255), index=True)
+    alias: Mapped[str] = mapped_column(String(255), index=True)
+    normalized_alias: Mapped[str] = mapped_column(String(255), index=True)
+    source: Mapped[str] = mapped_column(String(64), default="manual")
+    __table_args__ = (UniqueConstraint("entity_type", "entity_key", "normalized_alias", name="uq_search_alias_entity"),)
+
+
+class SearchDocument(Base):
+    __tablename__ = "search_document"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(64), index=True)
+    entity_key: Mapped[str] = mapped_column(String(255), index=True)
+    title: Mapped[str] = mapped_column(String(512), index=True)
+    subtitle: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    body: Mapped[str] = mapped_column(Text, default="")
+    normalized_text: Mapped[str] = mapped_column(Text)
+    fiscal_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    additive_group: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    __table_args__ = (UniqueConstraint("entity_type", "entity_key", name="uq_search_document_entity"),)

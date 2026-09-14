@@ -1,0 +1,40 @@
+{
+  "fixture_notice": "Supplemental deterministic OMB-shaped detail used only by offline Phase 4-6 integration tests. The two detail rows replace an equal amount of the pre-existing All Other fixture row so the FY2025 fixture remains reconciled to Treasury's $7,009,992,000,000 control total.",
+  "reduce_account_code": "099-9999",
+  "rows": [
+    {
+      "agency_code": "009",
+      "agency_name": "Department of Health and Human Services",
+      "bureau_code": "00",
+      "bureau_name": "Centers for Medicare & Medicaid Services",
+      "account_code": "5700",
+      "federal_account_code": "075-5700",
+      "account_name": "Fixture: Medicare aggregate",
+      "treasury_agency_code": "075",
+      "cgac_agency_code": "075",
+      "subfunction_code": "571",
+      "subfunction_title": "Medicare",
+      "bea_category": "M",
+      "grant_split": "N",
+      "on_off_budget": "On-budget",
+      "amount": "1000000000000"
+    },
+    {
+      "agency_code": "012",
+      "agency_name": "Department of Agriculture",
+      "bureau_code": "00",
+      "bureau_name": "Food and Nutrition Service",
+      "account_code": "3505",
+      "federal_account_code": "012-3505",
+      "account_name": "Supplemental Nutrition Assistance Program",
+      "treasury_agency_code": "012",
+      "cgac_agency_code": "012",
+      "subfunction_code": "605",
+      "subfunction_title": "Food and Nutrition Assistance",
+      "bea_category": "M",
+      "grant_split": "N",
+      "on_off_budget": "On-budget",
+      "amount": "98000000"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # TaxTrace methodology specification
 
-Methodology version: **1.0.0**  
-Status: governing specification for phases 0–3 and prerequisite for phase 4
+Methodology version: **1.1.0**
+Status: governing specification for implemented phases 0–6
 
 ## 1. Headline definition
 
@@ -89,11 +89,11 @@ The initial federal mappings are:
 - employee Medicare tax -> Medicare Hospital Insurance financing pool;
 - Additional Medicare Tax -> Medicare Hospital Insurance financing pool.
 
-These mappings are methodological inputs, not claims that every final expenditure relationship has already been implemented in phases 0–3.
+These mappings are methodological inputs. Phase 4 applies them through explicit pool-to-spending eligibility rules; later phases may refine the public-data grain without changing the underlying tax-to-pool relationship.
 
 ## 6. General-revenue allocation
 
-When pool revenue is fungible, phase 4 will calculate an attribution weight for eligible activity `j`:
+When pool revenue is fungible, the implemented Phase 4 engine calculates an attribution weight for eligible activity `j`:
 
 `W(p,j) = E(p,j) / sum_k E(p,k)`
 
@@ -105,7 +105,7 @@ A complete additive partition must satisfy:
 
 `sum_j A_j = sum_p C_p`.
 
-The repository already includes the conservation assertion used to enforce this invariant, although phase 4 does not yet perform the receipt allocation.
+The Phase 4 receipt engine enforces this invariant for every pool and for the complete purpose receipt. Cent rounding is reconciled so displayed children equal the displayed parent.
 
 ## 7. Deficits and borrowing
 
@@ -177,7 +177,7 @@ Used as the authoritative completed-year aggregate receipts/outlays control sour
 Used for account/bureau/subfunction outlay and receipt detail. The FY2027 user guide documents its positional schema and reports amounts in thousands of dollars; the parser converts them to dollars.
 
 ### USAspending
-Used for federal agency/account, Treasury account, program-activity, object-class, budget-function/subfunction and later award/recipient detail. These dimensions are maintained as overlapping views, not added together.
+Used for federal agency/account, Treasury account, program-activity, object-class, budget-function/subfunction, award, and recipient detail. These dimensions are maintained as overlapping views, not added together.
 
 ## 15. Reconciliation
 
@@ -197,7 +197,7 @@ A failed or ambiguous reconciliation should block publication of a dependent pub
 
 Warehouse monetary values are stored as fixed-precision decimals in dollars. Float arithmetic is not used for tax liability or allocation mathematics.
 
-Calculations retain precision internally. UI rounding happens at presentation. A future additive receipt must use a deterministic rounding-reconciliation method so displayed children still sum to their displayed parent.
+Calculations retain precision internally. Additive receipt/explorer views use a deterministic largest-remainder cent-reconciliation method so displayed children sum exactly to their displayed parent and source-row ordering cannot move a rounding cent between categories.
 
 ## 17. Confidence versus uncertainty
 
@@ -217,7 +217,7 @@ When a future statistical model can estimate prediction uncertainty, that interv
 
 Specificity ends where evidence ends. If public accounting supports an agency total but not a particular covert or internal activity, TaxTrace must return insufficient data rather than invent a line-item estimate.
 
-## 19. Machine-enforced invariants present in phases 0–3
+## 19. Machine-enforced invariants present in phases 0–6
 
 - active revenue-to-pool shares sum to 1;
 - money is represented with decimals;
@@ -225,9 +225,45 @@ Specificity ends where evidence ends. If public accounting supports an agency to
 - actual/proposed status is attached to imported OMB records;
 - overlapping USAspending dimensions receive distinct scopes;
 - reconciliation differences are retained explicitly;
-- allocation conservation assertion exists for phase 4;
+- tax-to-pool, pool-to-child, top-level receipt, and explorer-scope conservation are enforced;
 - tax rules are versioned by tax year rather than embedded as timeless constants.
 
 ## 20. Methodology change policy
 
 A change that alters the semantic meaning or numerical result of a published receipt requires a methodology-version change and an ADR/changelog entry. Historical calculations must retain enough version metadata to remain reproducible.
+
+
+## 21. Operational pool-to-spending eligibility (methodology 1.1.0)
+
+Phase 4 makes the funding-pool restriction operational through effective-dated `PoolSpendRule` rows. The current federal rules use OMB actual account outlays as the primary receipt base.
+
+- `FED_GENERAL` allocates across OMB actual account outlays after excluding the Social Security 650/651 base. Medicare remains in the general allocation domain because Medicare is materially mixed-funded. General-pool attribution is `ALLOCATED` and receives confidence B.
+- `OASI` and `DI` restrict attribution to the Social Security 650/651 spending base. Their revenue relationship is `DIRECT`, but the current public spending grain does not separate final OASI and DI uses, so these allocations receive confidence D for incomplete source separation.
+- `MEDICARE_HI` restricts attribution to the Medicare 570/571 spending base. Its revenue relationship is `DIRECT`, but that broad Medicare spending base also contains spending financed from other sources, so the current allocation receives confidence D for incomplete source separation.
+- When a displayed purpose receives attribution from more than one financing pool, TaxTrace labels the combined purpose `MIXED_FUNDING`. This prevents the UI from implying that a mixed-financed program has one exclusive revenue source.
+
+If an active pool has no matching actual expenditure facts, TaxTrace does not widen the pool automatically. The contribution is retained as `UNALLOCATED_DETAIL` with confidence N/A. This preserves the tax-dollar conservation invariant while obeying the refusal rule.
+
+## 22. Drill-down explorer methodology
+
+The Phase 5 explorer begins with the exact Phase 4 fact allocations and changes only how those facts are grouped or, for deeper USAspending dimensions, how a defensible parent scope is subdivided.
+
+OMB purpose, agency, and federal-account views are direct regroupings of the same allocated OMB account facts. Program-activity detail is used only when a USAspending federal account can be crosswalked by exact federal-account code. Object-class detail is crosswalked at agency level by native code or normalized agency name. Award detail is crosswalked through explicit `AwardAccountLink` records.
+
+When USAspending detail covers only part of a selected parent scope, the uncovered share is returned as a residual node. Therefore every explorer response is additive within itself:
+
+`sum(view nodes including residual) = selected parent scope amount`.
+
+Explorer views are not additive across dimensions. Adding an agency view to a purpose view would double count the same underlying receipt.
+
+## 23. Award/recipient semantics
+
+Awards are a detail classification, not an additional expenditure layer. Award amounts and reported award outlays are used only to subdivide a crosswalked parent receipt scope. They are never added on top of OMB outlays. Award searches may overlap each other, accounts, agencies, recipients, and program categories.
+
+## 24. Search methodology
+
+Phase 6 maintains a separate portable search index over normalized finance entities. Search ranking uses canonical titles, descriptions, identifiers, aliases, abbreviations, curated synonyms, and approximate string similarity. The current portable implementation is designed to run on SQLite and PostgreSQL; a later OpenSearch-backed implementation may replace ranking without changing the public entity contract.
+
+Search results are discovery/navigation results, not an additive partition. They are explicitly marked non-additive because the same spending can match multiple entities or concepts.
+
+Manual/curated aliases are stored separately from official names so TaxTrace never rewrites government-native source labels.

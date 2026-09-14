@@ -48,6 +48,20 @@ class HttpFetcher:
                     time.sleep(2**attempt)
         raise SourceDownloadError(f"Unable to query {url}: {last_exc}") from last_exc
 
+    def post_json(self, url: str, json_body: dict) -> dict:
+        last_exc: Exception | None = None
+        for attempt in range(self.retries):
+            try:
+                with httpx.Client(timeout=self.timeout, follow_redirects=True, headers=self.headers) as client:
+                    response = client.post(url, json=json_body)
+                    response.raise_for_status()
+                    return response.json()
+            except Exception as exc:
+                last_exc = exc
+                if attempt + 1 < self.retries:
+                    time.sleep(2**attempt)
+        raise SourceDownloadError(f"Unable to query {url}: {last_exc}") from last_exc
+
 
 def filename_from_url(url: str, fallback: str) -> str:
     name = Path(urlparse(url).path).name

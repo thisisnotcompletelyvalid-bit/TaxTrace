@@ -72,7 +72,7 @@ jobs:
           done
           cat /tmp/taxtrace-api.log
           exit 1
-      - name: Exercise API and browser CORS
+      - name: Exercise phases 4-6 API and browser CORS
         run: |
           python - <<'PY'
           import httpx
@@ -84,27 +84,74 @@ jobs:
           status = httpx.get(f"{base}/v1/warehouse/status")
           status.raise_for_status()
           data = status.json()
-          assert data["source_snapshots"] == 8, data
-          assert data["spend_facts"] == 18, data
-          assert data["agencies"] == 5, data
+          assert data["source_snapshots"] == 11, data
+          assert data["spend_facts"] == 22, data
+          assert data["agencies"] == 7, data
           assert data["treasury_aggregate_rows"] == 32, data
+          assert data["awards"] == 2, data
+          assert data["search_documents"] >= 40, data
 
-          result = httpx.post(
-              f"{base}/v1/tax/federal",
+          request = {
+              "tax_year": 2026,
+              "spending_fiscal_year": 2025,
+              "filing_status": "single",
+              "wage_income": "50000",
+              "spouse_wage_income": "0",
+              "qualifying_children_under_17": 0,
+              "other_dependents": 0,
+          }
+          receipt = httpx.post(f"{base}/v1/receipt/federal", json=request)
+          receipt.raise_for_status()
+          body = receipt.json()
+          assert body["total_allocable_taxes"] == "7645.00", body
+          assert body["conservation_difference"] == "0.00", body
+          assert sum(float(x["allocated_amount"]) for x in body["purpose"]) == 7645.0, body
+          medicare = next(x for x in body["purpose"] if x["label"] == "Medicare")
+          assert medicare["allocated_amount"] == "1428.59", medicare
+          assert medicare["allocation_status"] == "MIXED_FUNDING", medicare
+          assert medicare["confidence"] == "D", medicare
+          social_security = next(x for x in body["purpose"] if x["label"] == "Social Security")
+          assert social_security["allocated_amount"] == "3100.00", social_security
+          assert social_security["allocation_status"] == "MIXED_FUNDING", social_security
+          assert social_security["confidence"] == "D", social_security
+
+          explorer = httpx.post(
+              f"{base}/v1/explorer/federal",
               json={
-                  "tax_year": 2026,
-                  "filing_status": "single",
-                  "wage_income": "50000",
-                  "spouse_wage_income": "0",
-                  "qualifying_children_under_17": 0,
-                  "other_dependents": 0,
+                  **request,
+                  "view": "program_activity",
+                  "parent_type": "federal_account",
+                  "parent_key": "federal_account:012-3505",
               },
           )
-          result.raise_for_status()
-          assert result.json()["total_personal_tax_liability"] == "7645.00", result.text
+          explorer.raise_for_status()
+          detail = explorer.json()
+          assert detail["scope_amount"] == "0.07", detail
+          assert detail["conservation_difference"] == "0.00", detail
+          assert any(n["label"] == "Nutrition Assistance" for n in detail["nodes"]), detail
+
+          search = httpx.get(f"{base}/v1/search", params={"q": "food stamps"})
+          search.raise_for_status()
+          results = search.json()["results"]
+          assert results and results[0]["title"] == "Supplemental Nutrition Assistance Program", results
+          assert all(result["additive"] is False for result in results), results
+
+          contextual = httpx.post(
+              f"{base}/v1/search/federal",
+              json={**request, "q": "food stamps", "limit": 10},
+          )
+          contextual.raise_for_status()
+          contextual_results = contextual.json()["results"]
+          snap = next(
+              result
+              for result in contextual_results
+              if result["title"] == "Supplemental Nutrition Assistance Program"
+          )
+          assert snap["attributable_amount"] == "0.07", contextual_results
+          assert snap["additive"] is False, snap
 
           cors = httpx.options(
-              f"{base}/v1/tax/federal",
+              f"{base}/v1/receipt/federal",
               headers={
                   "Origin": "http://localhost:3000",
                   "Access-Control-Request-Method": "POST",
@@ -129,7 +176,7 @@ jobs:
             fi
             sleep 1
           done
-          if ! grep -q "Auditable federal tax and finance foundation" /tmp/taxtrace-home.html; then
+          if ! grep -q "public-finance path" /tmp/taxtrace-home.html; then
             cat /tmp/taxtrace-web.log
             exit 1
           fi

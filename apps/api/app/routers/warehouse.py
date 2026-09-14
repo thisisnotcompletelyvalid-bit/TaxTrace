@@ -3,7 +3,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from taxtrace.database import SessionLocal
-from taxtrace.db_models import Agency, ReconciliationResult, SourceSnapshot, SpendFact, TreasuryAggregate
+from taxtrace.db_models import Agency, Award, ReconciliationResult, SearchDocument, SourceSnapshot, SpendFact, TreasuryAggregate
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
 
@@ -23,6 +23,8 @@ def status(session: Session = Depends(get_db)) -> dict:
         "spend_facts": session.scalar(select(func.count(SpendFact.id))) or 0,
         "agencies": session.scalar(select(func.count(Agency.id))) or 0,
         "treasury_aggregate_rows": session.scalar(select(func.count(TreasuryAggregate.id))) or 0,
+        "awards": session.scalar(select(func.count(Award.id))) or 0,
+        "search_documents": session.scalar(select(func.count(SearchDocument.id))) or 0,
     }
 
 

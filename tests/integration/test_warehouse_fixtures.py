@@ -28,7 +28,7 @@ def test_offline_fixture_pipeline_loads_and_reconciles(db_session, tmp_path, mon
     seed_federal_methodology_entities(db_session)
     counts = ingest_all_fixtures(db_session, Path("data/fixtures"))
     assert counts["treasury"] > 20
-    assert counts["omb"] == 8
+    assert counts["omb"] == 10
     assert counts["usaspending"] > 0
     assert validate_revenue_pool_shares(db_session, 2026) == []
 
