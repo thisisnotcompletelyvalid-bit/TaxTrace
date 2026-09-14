@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from taxtrace.config import PROJECT_ROOT
 from taxtrace.db_models import OMBAccountRecord, SpendFact, TreasuryAggregate
 from taxtrace.enums import DataStatus, FinancialMetric, SourceKind
 from taxtrace.finance.snapshot import SnapshotStore
@@ -208,19 +209,20 @@ def ingest_usaspending_fixture(session: Session, bundle_path: Path, fiscal_year:
     return source.ingest(session, fiscal_year=fiscal_year, agency_codes=["012"], include_awards=True)
 
 
-def ingest_all_fixtures(session: Session, root: Path = Path("data/fixtures")) -> dict[str, int]:
+def ingest_all_fixtures(session: Session, root: Path | None = None) -> dict[str, int]:
+    fixture_root = root or (PROJECT_ROOT / "data" / "fixtures")
     return {
         "treasury": ingest_treasury_fixture(
-            session, root / "treasury" / "fy2025_summary.json", fiscal_year=2025
+            session, fixture_root / "treasury" / "fy2025_summary.json", fiscal_year=2025
         ),
         "omb": ingest_omb_fixtures(
             session,
-            root / "omb" / "outlays_fixture.xlsx",
-            root / "omb" / "receipts_fixture.xlsx",
+            fixture_root / "omb" / "outlays_fixture.xlsx",
+            fixture_root / "omb" / "receipts_fixture.xlsx",
             fiscal_year=2025,
-            supplemental_path=root / "omb" / "phase4_detail.json",
+            supplemental_path=fixture_root / "omb" / "phase4_detail.json",
         ),
         "usaspending": ingest_usaspending_fixture(
-            session, root / "usaspending" / "usda_fy2025.json", fiscal_year=2025
+            session, fixture_root / "usaspending" / "usda_fy2025.json", fiscal_year=2025
         ),
     }
