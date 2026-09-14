@@ -6,6 +6,8 @@ from decimal import Decimal
 import typer
 from sqlalchemy import func, select
 
+from taxtrace.allocation.engine import FederalAllocationEngine
+from taxtrace.allocation.models import FederalReceiptRequest
 from taxtrace.database import Base, SessionLocal, engine
 from taxtrace.db_models import Agency, Award, SearchDocument, SourceSnapshot, SpendFact, TreasuryAggregate
 from taxtrace.enums import FilingStatus, SourceKind
@@ -15,22 +17,22 @@ from taxtrace.finance.seed import seed_federal_methodology_entities
 from taxtrace.finance.sources.omb import OMBPublicBudgetDatabaseSource
 from taxtrace.finance.sources.treasury import TreasuryCombinedStatementSource
 from taxtrace.finance.sources.usaspending import USASpendingSource
-from taxtrace.allocation.engine import FederalAllocationEngine
-from taxtrace.allocation.models import FederalReceiptRequest
-from taxtrace.search import rebuild_search_index, search as search_index
 from taxtrace.methodology.invariants import validate_revenue_pool_shares
+from taxtrace.search import rebuild_search_index, search as search_index
 from taxtrace.tax.engine import FederalTaxEngine
 from taxtrace.tax.models import FederalTaxInput
+from taxtrace.warehouse_v2.cli import app as data_app
 
-app = typer.Typer(help="TaxTrace Phases 0-6 command line interface.")
+app = typer.Typer(help="TaxTrace tax-attribution and national public-finance command line interface.")
 db_app = typer.Typer(help="Database commands")
 tax_app = typer.Typer(help="Tax-engine commands")
-warehouse_app = typer.Typer(help="Federal finance warehouse commands")
+warehouse_app = typer.Typer(help="Legacy federal finance warehouse commands")
 search_app = typer.Typer(help="Search-index commands")
 receipt_app = typer.Typer(help="Federal receipt commands")
 app.add_typer(db_app, name="db")
 app.add_typer(tax_app, name="tax")
 app.add_typer(warehouse_app, name="warehouse")
+app.add_typer(data_app, name="data")
 app.add_typer(search_app, name="search")
 app.add_typer(receipt_app, name="receipt")
 
@@ -80,13 +82,18 @@ def warehouse_ingest_usaspending(
     fiscal_year: int = 2025,
     agency: list[str] | None = typer.Option(None, "--agency", help="Repeatable toptier agency code"),
     all_agencies: bool = typer.Option(False, "--all-agencies", help="Ingest every toptier agency"),
-    include_awards: bool = typer.Option(False, "--include-awards", help="Also ingest account-filtered award/recipient detail"),
+    include_awards: bool = typer.Option(
+        False, "--include-awards", help="Also ingest account-filtered award/recipient detail"
+    ),
 ) -> None:
     if not all_agencies and not agency:
         raise typer.BadParameter("Pass at least one --agency CODE or --all-agencies")
     with SessionLocal() as session:
         count = USASpendingSource().ingest(
-            session, fiscal_year=fiscal_year, agency_codes=None if all_agencies else agency, include_awards=include_awards
+            session,
+            fiscal_year=fiscal_year,
+            agency_codes=None if all_agencies else agency,
+            include_awards=include_awards,
         )
         rebuild_search_index(session)
     typer.echo(f"Loaded {count} USAspending facts/award records for FY{fiscal_year}.")
@@ -190,9 +197,13 @@ def receipt_federal(
     spending_fiscal_year: int = typer.Option(2025, "--spending-fiscal-year"),
 ) -> None:
     request = FederalReceiptRequest(
-        tax_year=tax_year, filing_status=filing_status, wage_income=Decimal(income),
-        spouse_wage_income=Decimal(spouse_income), qualifying_children_under_17=qualifying_children,
-        other_dependents=other_dependents, spending_fiscal_year=spending_fiscal_year,
+        tax_year=tax_year,
+        filing_status=filing_status,
+        wage_income=Decimal(income),
+        spouse_wage_income=Decimal(spouse_income),
+        qualifying_children_under_17=qualifying_children,
+        other_dependents=other_dependents,
+        spending_fiscal_year=spending_fiscal_year,
     )
     with SessionLocal() as session:
         result = FederalAllocationEngine().calculate(session, request)
