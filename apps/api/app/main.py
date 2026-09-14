@@ -8,8 +8,8 @@ from apps.api.app.routers import explorer, health, methodology, receipt, search,
 
 app = FastAPI(
     title="TaxTrace API",
-    version="0.2.0",
-    description="Runnable implementation of TaxTrace phases 0-6.",
+    version="0.3.0",
+    description="Runnable implementation of TaxTrace phases 0-9A, including Florida and Gainesville.",
 )
 app.add_middleware(
     CORSMiddleware,
