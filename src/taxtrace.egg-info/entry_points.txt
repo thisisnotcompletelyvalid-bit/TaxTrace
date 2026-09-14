@@ -1,0 +1,3 @@
+[console_scripts]
+taxtrace = taxtrace.cli:app
+taxtrace-api = taxtrace.dev_server:main

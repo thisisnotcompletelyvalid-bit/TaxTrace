@@ -1,0 +1,261 @@
+Metadata-Version: 2.4
+Name: taxtrace
+Version: 0.2.0
+Summary: Auditable tax-liability and federal finance warehouse foundation for a 'where do my taxes go?' product.
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: alembic>=1.13
+Requires-Dist: fastapi>=0.115
+Requires-Dist: httpx>=0.27
+Requires-Dist: openpyxl>=3.1
+Requires-Dist: pandas>=2.2
+Requires-Dist: psycopg[binary]>=3.2
+Requires-Dist: pydantic>=2.9
+Requires-Dist: pydantic-settings>=2.5
+Requires-Dist: sqlalchemy>=2.0
+Requires-Dist: typer>=0.12
+Requires-Dist: uvicorn[standard]>=0.30
+Provides-Extra: dev
+Requires-Dist: pytest>=8.3; extra == "dev"
+Requires-Dist: pytest-cov>=5; extra == "dev"
+Requires-Dist: ruff>=0.7; extra == "dev"
+Dynamic: license-file
+
+# TaxTrace — runnable phases 0–6
+
+TaxTrace is an auditable **"where do my federal taxes go?"** application. The repository now implements the engineering/methodology/tax/warehouse foundation (phases 0–3), the first complete federal receipt (phase 4), a drill-down explorer (phase 5), and indexed finance search (phase 6).
+
+The headline number is an **attribution**, not literal serial-number tracing of fungible dollars. Dedicated payroll taxes are restricted to their financing pools first; general revenue is allocated proportionally across the eligible actual-outlay base. Every additive receipt conserves the supported tax liability exactly after cent rounding.
+
+## What is implemented
+
+- **Phase 0:** Python package, FastAPI, Next.js, SQLite/PostgreSQL, Alembic, CI, source snapshots.
+- **Phase 1:** methodology/invariants for DIRECT vs ALLOCATED, transfers, deficits, non-additive classifications, provenance.
+- **Phase 2:** versioned 2026 federal W-2 tax engine.
+- **Phase 3:** Treasury/OMB/USAspending warehouse and reconciliation.
+- **Phase 4:** tax → revenue type → financing pool → eligible actual outlays → complete receipt, with provenance and residual handling.
+- **Phase 5:** purpose, agency, account, program-activity, object-class, and award explorer. Cross-dimensional views are not summed together.
+- **Phase 6:** search over agencies, accounts, program activities, object classes, awards, recipients, canonical categories, abbreviations, aliases, and curated synonyms.
+
+## No-Docker local run
+
+Requirements:
+
+- Python 3.11+
+- Node.js 22+ recommended
+- npm
+- Git
+
+```bash
+git clone https://github.com/thisisnotcompletelyvalid-bit/TaxTrace.git
+cd TaxTrace
+
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
+python -m pip install -U pip
+pip install -e '.[dev]'
+
+alembic upgrade head
+taxtrace warehouse seed
+taxtrace warehouse ingest-fixtures
+taxtrace warehouse reconcile --fiscal-year 2025
+
+uvicorn apps.api.app.main:app --reload
+```
+
+Leave that terminal running. In a second terminal:
+
+```bash
+cd TaxTrace
+source .venv/bin/activate        # Windows: .venv\\Scripts\\activate
+cd apps/web
+npm install
+npm run dev
+```
+
+Open:
+
+- website: `http://localhost:3000`
+- API docs: `http://localhost:8000/docs`
+- API health: `http://localhost:8000/health`
+
+The deterministic fixtures include enough OMB/USAspending structure to exercise the complete receipt, account→program drill-down, award/recipient search, and reconciliation without live federal downloads.
+
+## CLI examples
+
+Tax calculation only:
+
+```bash
+taxtrace tax federal --income 50000 --filing-status single
+```
+
+Complete federal receipt:
+
+```bash
+taxtrace receipt federal --income 50000 --filing-status single --spending-fiscal-year 2025
+```
+
+Search:
+
+```bash
+taxtrace search query "food stamps"
+taxtrace search query DOD
+taxtrace search query Florida
+```
+
+Rebuild the search index after manual data changes:
+
+```bash
+taxtrace search rebuild
+```
+
+## API
+
+### Federal receipt
+
+`POST /v1/receipt/federal`
+
+```json
+{
+  "tax_year": 2026,
+  "spending_fiscal_year": 2025,
+  "filing_status": "single",
+  "wage_income": "50000",
+  "spouse_wage_income": "0",
+  "qualifying_children_under_17": 0,
+  "other_dependents": 0
+}
+```
+
+For the fixture-backed $50,000 single-filer example, supported tax liability is `$7,645.00` and the complete purpose receipt sums to exactly `$7,645.00`.
+
+### Explorer
+
+`POST /v1/explorer/federal`
+
+Add fields such as:
+
+```json
+{
+  "view": "program_activity",
+  "parent_type": "federal_account",
+  "parent_key": "federal_account:012-3505"
+}
+```
+
+Supported views:
+
+- `purpose`
+- `agency`
+- `account`
+- `program_activity`
+- `object_class`
+- `award`
+
+Every explorer response contains `scope_amount` and `conservation_difference`. Residual nodes are explicit when the selected detail source cannot account for the whole parent scope.
+
+### Search
+
+`GET /v1/search?q=food%20stamps` performs text discovery.
+
+`POST /v1/search/federal` accepts the same tax/receipt context plus `q` and can attach a taxpayer-specific attributable amount where the search entity can be defensibly mapped back to the receipt/explorer. Search results are **not additive**. A program, account, award, recipient, and canonical category can all refer to overlapping public spending, so search-result amounts must never be summed unless a future endpoint explicitly marks a set additive.
+
+## Finance methodology in the implemented receipt
+
+Supported Phase-2 taxes are mapped as follows:
+
+- federal individual income tax → federal general financing pool;
+- employee OASDI → OASI and DI according to the seeded split;
+- employee Medicare tax → Medicare Hospital Insurance;
+- Additional Medicare Tax → Medicare Hospital Insurance.
+
+Actual FY2025 OMB account outlays are the primary receipt allocation base. The general pool excludes the Social Security function/subfunction base because the supported OASDI tax is dedicated to OASI/DI. Medicare remains eligible for general-pool attribution because Medicare is materially mixed-funded; HI payroll-tax attribution is separately restricted to the Medicare spending base. When multiple financing pools contribute to the same purpose, the combined node is marked `MIXED_FUNDING`, and confidence is lowered where public reporting cannot separate the final uses at that grain. If a pool lacks matching actual detail, TaxTrace preserves the user's contribution in an `UNALLOCATED_DETAIL` node rather than inventing specificity.
+
+Program-activity, object-class, and award views use USAspending data only after a defensible crosswalk to the OMB receipt scope. Where the crosswalk is incomplete, an explicit residual keeps the explorer additive.
+
+## Live federal data ingestion
+
+The repository remains runnable with fixtures, but live commands are available.
+
+Treasury:
+
+```bash
+taxtrace warehouse ingest-treasury --fiscal-year 2025
+```
+
+OMB:
+
+```bash
+taxtrace warehouse ingest-omb --fiscal-year 2025
+taxtrace search rebuild
+```
+
+USAspending, one agency first:
+
+```bash
+taxtrace warehouse ingest-usaspending --fiscal-year 2025 --agency 012
+```
+
+Include account-filtered award/recipient detail:
+
+```bash
+taxtrace warehouse ingest-usaspending --fiscal-year 2025 --agency 012 --include-awards
+```
+
+Whole-government USAspending ingestion can make many requests; a single agency is the recommended live smoke test.
+
+## Tests
+
+```bash
+pytest
+ruff check src apps tests
+python -m compileall -q src apps alembic
+```
+
+GitHub Actions also contains a `no-docker-e2e` job that:
+
+1. creates a fresh SQLite database;
+2. runs both Alembic migrations;
+3. seeds financing rules;
+4. ingests fixtures and reconciles OMB/Treasury;
+5. starts FastAPI;
+6. tests the complete receipt, explorer, search, and CORS;
+7. builds and starts Next.js;
+8. requests the rendered website.
+
+## Repository map
+
+```text
+apps/
+  api/                         FastAPI application
+  web/                         Next.js receipt/explorer/search UI
+src/taxtrace/
+  tax/                         federal tax engine
+  finance/                     snapshots, OMB/Treasury/USAspending ingestion
+  allocation/                  phase-4 receipt engine
+  explorer.py                  phase-5 drill-down engine
+  search.py                    phase-6 portable search index
+  methodology/                 machine-enforced invariants
+data/
+  fixtures/                    deterministic federal fixture bundle
+  tax_rules/federal/           auditable tax-rule mirror
+docs/
+  METHODOLOGY.md
+  ALLOCATION_ENGINE.md
+  DATA_SOURCES.md
+  TAX_ENGINE.md
+  PRODUCT_SCOPE.md
+  architecture/
+alembic/
+tests/
+```
+
+## Scope note
+
+TaxTrace is public-finance/research software, not tax-return preparation, tax advice, or legal advice. The current tax engine intentionally covers a narrower set of federal personal-tax situations than the Internal Revenue Code. The receipt also reflects the supported data/methodology, not a claim that fungible federal dollars can be literally traced from one taxpayer to one check.
+
+## License
+
+MIT.
