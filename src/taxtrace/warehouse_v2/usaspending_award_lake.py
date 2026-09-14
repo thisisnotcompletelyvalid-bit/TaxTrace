@@ -26,6 +26,15 @@ class USAspendingAwardArchiveMember:
     columns: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class AwardReleaseIdentity:
+    release_key: str
+    reference_period: str
+    coverage_type: str
+    start_date: str | None
+    end_date: str | None
+
+
 def classify_award_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, str]:
     """Classify a Custom Award Data Download member by its actual schema.
 
@@ -44,8 +53,6 @@ def classify_award_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, s
         "sub_awardee_or_recipient_legal",
     }
     if normalized & subaward_markers:
-        # USAspending File F contract exports identify the parent prime award
-        # with prime_award_piid; assistance exports use prime_award_fain/URI.
         if "prime_award_piid" in normalized:
             return "F", "contract"
         if "prime_award_fain" in normalized or "prime_award_uri" in normalized:
@@ -97,6 +104,60 @@ def inspect_award_archive(zip_path: Path) -> list[USAspendingAwardArchiveMember]
     return members
 
 
+def _request_date_range(request: dict | None) -> tuple[str | None, str | None]:
+    if not request:
+        return None, None
+    filters = request.get("filters")
+    if not isinstance(filters, dict):
+        return None, None
+
+    date_range = filters.get("date_range")
+    if isinstance(date_range, dict):
+        start = date_range.get("start_date")
+        end = date_range.get("end_date")
+        return (str(start) if start else None, str(end) if end else None)
+
+    time_period = filters.get("time_period")
+    if isinstance(time_period, list) and time_period and isinstance(time_period[0], dict):
+        start = time_period[0].get("start_date")
+        end = time_period[0].get("end_date")
+        return (str(start) if start else None, str(end) if end else None)
+    return None, None
+
+
+def award_release_identity(fiscal_year: int, request: dict | None) -> AwardReleaseIdentity:
+    full_start = f"{fiscal_year - 1:04d}-10-01"
+    full_end = f"{fiscal_year:04d}-09-30"
+    start, end = _request_date_range(request)
+
+    if start is None and end is None:
+        return AwardReleaseIdentity(
+            release_key=f"FY{fiscal_year}",
+            reference_period=f"FY{fiscal_year}",
+            coverage_type="FEDERAL_AWARD",
+            start_date=None,
+            end_date=None,
+        )
+    if not start or not end:
+        raise ValueError("USAspending award request must provide both start_date and end_date")
+    if start == full_start and end == full_end:
+        return AwardReleaseIdentity(
+            release_key=f"FY{fiscal_year}",
+            reference_period=f"FY{fiscal_year}",
+            coverage_type="FEDERAL_AWARD",
+            start_date=start,
+            end_date=end,
+        )
+
+    return AwardReleaseIdentity(
+        release_key=f"FY{fiscal_year}_{start}_{end}",
+        reference_period=f"{start}/{end}",
+        coverage_type="FEDERAL_AWARD_SLICE",
+        start_date=start,
+        end_date=end,
+    )
+
+
 def _definition(session: Session, dataset_key: str) -> DatasetDefinition:
     row = session.scalar(select(DatasetDefinition).where(DatasetDefinition.key == dataset_key))
     if row is None:
@@ -111,21 +172,21 @@ def _release(
     fiscal_year: int,
     request: dict | None,
 ) -> DatasetRelease:
-    release_key = f"FY{fiscal_year}"
+    identity = award_release_identity(fiscal_year, request)
     row = session.scalar(
         select(DatasetRelease).where(
             DatasetRelease.dataset_id == dataset.id,
-            DatasetRelease.release_key == release_key,
+            DatasetRelease.release_key == identity.release_key,
         )
     )
     if row is None:
         row = DatasetRelease(
             dataset_id=dataset.id,
-            release_key=release_key,
+            release_key=identity.release_key,
             reference_year=fiscal_year,
-            reference_period=release_key,
+            reference_period=identity.reference_period,
             status="MATERIALIZING",
-            coverage_type="FEDERAL_AWARD",
+            coverage_type=identity.coverage_type,
             metadata_json={},
         )
         session.add(row)
@@ -133,8 +194,15 @@ def _release(
     metadata = dict(row.metadata_json or {})
     if request is not None:
         metadata["download_request"] = request
+    if identity.start_date and identity.end_date:
+        metadata["requested_date_range"] = {
+            "start_date": identity.start_date,
+            "end_date": identity.end_date,
+        }
     row.metadata_json = metadata
     row.status = "MATERIALIZING"
+    row.reference_period = identity.reference_period
+    row.coverage_type = identity.coverage_type
     return row
 
 
@@ -153,6 +221,7 @@ def materialize_award_archive(
     schemas are preserved rather than coerced into a lossy union.
     """
     lake = lake or LakeStore()
+    identity = award_release_identity(fiscal_year, request)
     inspected = inspect_award_archive(zip_path)
     by_dataset: dict[str, list[USAspendingAwardArchiveMember]] = {}
     for member in inspected:
@@ -194,7 +263,7 @@ def materialize_award_archive(
                 delimiter = "\t" if suffix == ".tsv" else ","
                 extracted = lake.path_for(
                     dataset_key,
-                    f"FY{fiscal_year}",
+                    identity.release_key,
                     "staging",
                     f"{member.data_class.lower()}_{member.award_family}_{part_number:04d}{suffix}",
                 )
@@ -203,7 +272,7 @@ def materialize_award_archive(
 
                 parquet = lake.path_for(
                     dataset_key,
-                    f"FY{fiscal_year}",
+                    identity.release_key,
                     "normalized",
                     f"{member.data_class.lower()}_{member.award_family}_{part_number:04d}.parquet",
                 )
@@ -223,6 +292,7 @@ def materialize_award_archive(
                     row_count=row_count,
                     partition={
                         "fiscal_year": fiscal_year,
+                        "release_key": identity.release_key,
                         "data_class": member.data_class,
                         "award_family": member.award_family,
                         "part": part_number,
@@ -267,6 +337,8 @@ def materialize_award_archive(
             release.metadata_json = metadata
             session.commit()
             results[dataset_key] = {
+                "release_key": identity.release_key,
+                "coverage_type": identity.coverage_type,
                 "rows": total_rows,
                 "members": len(members),
                 "parts": part_results,
@@ -276,5 +348,6 @@ def materialize_award_archive(
     return {
         "archive": str(zip_path),
         "fiscal_year": fiscal_year,
+        "release_key": identity.release_key,
         "datasets": results,
     }
