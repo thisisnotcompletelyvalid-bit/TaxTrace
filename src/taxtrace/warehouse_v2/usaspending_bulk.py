@@ -20,6 +20,13 @@ DOWNLOAD_ENDPOINTS = {
 }
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
 
+# USAspending can report `ready` before the generated object is retrievable from
+# files.usaspending.gov. A real account-download run observed the transition
+# `ready` -> `finished`; only the latter had a stable HTTP 200 archive. Keep
+# `ready` deliberately out of this terminal-success set.
+TERMINAL_SUCCESS_STATES = {"finished", "complete", "completed", "success", "done"}
+TERMINAL_FAILURE_STATES = {"failed", "error", "cancelled", "canceled"}
+
 
 @dataclass(frozen=True)
 class USASpendingDownloadJob:
@@ -44,8 +51,8 @@ class USASpendingBulkClient:
     """Durable client around USAspending's official asynchronous bulk-download surface.
 
     USAspending returns the eventual file URL when a job is submitted, before the archive is
-    necessarily ready. TaxTrace therefore polls the status endpoint whenever a file name is
-    present and only downloads after a terminal success state.
+    necessarily retrievable. TaxTrace therefore polls the status endpoint whenever a file name
+    is present and only downloads after a terminal success state such as `finished`.
     """
 
     def __init__(self, timeout: float | None = None):
@@ -88,9 +95,9 @@ class USASpendingBulkClient:
         for _ in range(max_polls):
             latest = self.status(job.file_name)
             state = str(latest.get("status") or latest.get("state") or "").lower()
-            if state in {"finished", "complete", "completed", "success", "ready"}:
+            if state in TERMINAL_SUCCESS_STATES:
                 return {**job.response, **latest}
-            if state in {"failed", "error", "cancelled", "canceled"}:
+            if state in TERMINAL_FAILURE_STATES:
                 raise RuntimeError(f"USAspending download failed: {latest}")
             time.sleep(poll_seconds)
         raise TimeoutError(
@@ -98,6 +105,12 @@ class USASpendingBulkClient:
         )
 
     def download_completed(self, response: dict, destination: Path) -> Path:
+        state = str(response.get("status") or response.get("state") or "").lower()
+        if state and state not in TERMINAL_SUCCESS_STATES:
+            raise RuntimeError(
+                "USAspending archive is not in a terminal success state; "
+                f"refusing an early download attempt: {state!r}"
+            )
         url = response.get("file_url") or response.get("download_url") or response.get("url")
         if not url:
             raise RuntimeError(f"Completed USAspending response has no download URL: {response}")
