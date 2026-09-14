@@ -74,6 +74,7 @@ type ExplorerNode = {
   method: string;
   drilldown_views: string[];
   notes: string[];
+  sources?: SourceReference[];
 };
 
 type ExplorerResult = {
