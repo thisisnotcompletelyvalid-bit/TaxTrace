@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.1 — 2026-09-14
+
+Connected the conserved federal personalized receipt to Warehouse V2 File B detail:
+
+- added `POST /v2/receipt/federal`;
+- kept OMB actual federal-account outlays as the controlling additive parent attribution;
+- used USAspending File B only to partition an already-attributed federal-account amount across program activity × object class detail;
+- required full-fiscal-year File B provenance (`period=12`) before using File B as a receipt partition;
+- degraded safely to explicit detail-unavailable residual children when a READY full-year release or local Parquet objects are unavailable;
+- enforced exact top-level and account-child cent conservation before publication;
+- added synthetic File B regression coverage including 60/40 proportional allocation and partial-period rejection;
+- added no-Docker API smoke coverage for the V2 receipt and its fixture-only fallback behavior.
+
+Methodology remains **1.2.0**. File B government outlays are never added to OMB outlays, and File B children are additive only within the account-detail partition in which they are shown.
+
 ## 0.2.0 — 2026-09-13
 
 Completed TaxTrace phases 4–6:

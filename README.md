@@ -17,8 +17,9 @@ The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATE
 - **Phase 8:** Alachua County surtax routed through its dedicated school-capital, Wild Spaces & Public Places, and infrastructure purposes; Gainesville FY2025 audited governmental spending is available as a non-additive actual reference.
 - **Phase 9A:** statistical quick-mode sales-tax estimation using 2024 BLS Consumer Expenditure income-quintile data and an explicit Florida taxability matrix. It does **not** use `income × sales-tax rate`.
 - **Warehouse V2:** national Census government registry and finance ingestion, SQL + Parquet lake storage, coverage metadata, native-ledger schema, validated USAspending DATA Act File A/B/C account ingestion, and live-validated D1/D2 prime-transaction + File F subaward ingestion.
+- **Federal receipt V2 bridge:** the conserved personalized federal receipt can now use Warehouse V2 File B to partition each OMB-controlled federal-account attribution into program activity × object class detail without adding OMB and USAspending outlays together.
 
-Methodology version: **1.2.0**. Application version: **0.5.0**.
+Methodology version: **1.2.0**. Application version: **0.5.1**.
 
 ## National warehouse status
 
@@ -55,6 +56,16 @@ File C award_unique_key
 These columns alias USAspending's canonical generated award identity. They are relationship keys, not permission to sum or naively row-join the grains. File C and D1/D2 can repeat the same award identity, so cross-grain enrichment must first collapse or otherwise constrain each side to the intended award-identity grain to avoid many-to-many fan-out. File F remains downstream of the prime award and must never be added beside prime-award spending as another federal expenditure.
 
 See `docs/DATA_WAREHOUSE_V2.md` for architecture, source semantics, commands, validation results, and release gates.
+
+## Federal receipt V2 bridge
+
+`POST /v2/receipt/federal` preserves the existing calculated tax and financing-pool methodology while connecting the personalized receipt to Warehouse V2 File B detail.
+
+OMB actual account outlays remain the controlling additive parent values. A full-fiscal-year USAspending File B release may partition an already-attributed account amount across program activity × object class children using File B outlay shares. File B government outlay values are displayed independently and are never added to OMB outlays.
+
+The bridge only treats File B as a safe full-year receipt partition when the stored download provenance identifies period `12`. If a matching READY release is unavailable, its normalized Parquet objects are not local, or a safe full-year partition cannot be established, the receipt remains conserved and exposes explicit detail-unavailable residual children instead of inventing detail.
+
+File B children are additive only inside their account-detail partition. They must not be added to purpose, agency, award, File C, D1/D2, or File F views.
 
 ## Codespaces / no-Docker run
 
@@ -105,9 +116,13 @@ The sales-tax estimate selects the 2024 BLS **second income quintile** and is la
 
 ## API
 
-Federal receipt:
+Federal receipt V1:
 
 `POST /v1/receipt/federal`
+
+Federal receipt V2 bridge:
+
+`POST /v2/receipt/federal`
 
 Florida/Gainesville receipt:
 
@@ -137,6 +152,7 @@ Other V1 endpoints include:
 
 Warehouse V2 endpoints:
 
+- `POST /v2/receipt/federal`
 - `GET /v2/data/catalog`
 - `GET /v2/data/stats`
 - `GET /v2/data/governments/search?q=Gainesville`
@@ -227,7 +243,7 @@ ruff check src apps tests
 python -m compileall -q src apps alembic
 ```
 
-Normal GitHub Actions CI also runs migrations, frontend build, and no-Docker end-to-end application checks.
+Normal GitHub Actions CI also runs migrations, frontend build, and no-Docker end-to-end application checks. The no-Docker API smoke now exercises both the stable V1 receipt and the Warehouse V2 federal receipt bridge.
 
 Expensive real-source release gates are manual workflows:
 
@@ -239,14 +255,14 @@ Expensive real-source release gates are manual workflows:
 
 ```text
 apps/
-  api/                         FastAPI application, including /v2/data
+  api/                         FastAPI application, including /v2/data and /v2/receipt
   web/                         Next.js UI, including /florida
 src/taxtrace/
   tax/                         federal tax engine
   finance/                     federal snapshots and legacy ingestion
   allocation/                  federal receipt engine
   jurisdictional/              phases 7, 8 and 9A
-  warehouse_v2/                national catalog, Census, lake, native, USAspending bulk
+  warehouse_v2/                national catalog, Census, lake, native, USAspending bulk, receipt bridge
   data/source_catalog_v2.json  authoritative warehouse source manifest
   explorer.py                  federal drill-down engine
   search.py                    federal portable search index

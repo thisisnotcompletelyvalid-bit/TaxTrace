@@ -152,6 +152,20 @@ jobs:
           assert body["total_allocable_taxes"] == "7645.00", body
           assert body["conservation_difference"] == "0.00", body
 
+          receipt_v2 = httpx.post(f"{base}/v2/receipt/federal", json=request)
+          receipt_v2.raise_for_status()
+          body_v2 = receipt_v2.json()
+          assert body_v2["base_receipt"]["total_allocable_taxes"] == "7645.00", body_v2
+          assert body_v2["additive_partition_total"] == "7645.00", body_v2
+          assert body_v2["conservation_difference"] == "0.00", body_v2
+          assert body_v2["warehouse"]["status"] in {"NO_READY_RELEASE", "OBJECTS_NOT_LOCAL"}, body_v2
+          assert body_v2["accounts"], body_v2
+          assert all(
+              sum(float(child["allocated_amount"]) for child in account["children"])
+              == float(account["allocated_amount"])
+              for account in body_v2["accounts"]
+          ), body_v2
+
           local = httpx.post(
               f"{base}/v1/receipt/florida-gainesville",
               json={**request, "household_size": 1},
