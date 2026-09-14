@@ -1,8 +1,8 @@
-# TaxTrace — runnable phases 0–9A
+# TaxTrace — auditable tax attribution + national public-finance warehouse
 
-TaxTrace is an auditable **“where do my taxes go?”** application. It calculates supported federal personal taxes, attributes them to actual federal outlays, adds a Florida/Alachua quick-mode sales-tax estimate, and exposes audited Florida and Gainesville public-finance data without pretending modeled or fungible dollars are literally traceable.
+TaxTrace is an auditable **“where do my taxes go?”** application. It calculates supported personal taxes, attributes them to government spending without pretending fungible dollars are literally traceable, and is being expanded around a national multi-jurisdiction public-finance warehouse.
 
-The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATED.** Dedicated revenues stay restricted to their funding purpose. Fungible revenues are proportionally attributed across an eligible actual-spending partition. Every additive personalized receipt reconciles exactly after cent rounding.
+The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATED.** Dedicated revenues stay restricted to their funding purpose. Fungible revenues are proportionally attributed across eligible actual spending. Additive personalized receipts reconcile exactly after cent rounding.
 
 ## What is implemented
 
@@ -15,9 +15,26 @@ The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATE
 - **Phase 6:** indexed search over agencies, accounts, programs, awards, recipients, aliases, abbreviations, and curated synonyms.
 - **Phase 7:** modeled Florida state sales tax attributed across FY2025 audited State of Florida governmental-activity expenses.
 - **Phase 8:** Alachua County surtax routed through its dedicated school-capital, Wild Spaces & Public Places, and infrastructure purposes; Gainesville FY2025 audited governmental spending is available as a non-additive actual reference.
-- **Phase 9A:** first statistical tax-estimation layer. Quick mode uses 2024 BLS Consumer Expenditure income-quintile data plus an explicit Florida taxability matrix to estimate sales tax. It does **not** use `income × sales-tax rate`.
+- **Phase 9A:** statistical quick-mode sales-tax estimation using 2024 BLS Consumer Expenditure income-quintile data and an explicit Florida taxability matrix. It does **not** use `income × sales-tax rate`.
+- **Warehouse V2:** national Census government registry and finance ingestion, SQL + Parquet lake storage, coverage metadata, native-ledger schema, and validated USAspending DATA Act File A/B/C bulk ingestion.
 
-Methodology version: **1.2.0**. Application version: **0.3.0**.
+Methodology version: **1.2.0**. Application version: **0.4.0**.
+
+## National warehouse status
+
+Warehouse V2 is designed around source grain rather than forcing every government into one additive tree. Function, department, fund, program, object class, project, recipient, vendor, award, account, and geography are treated as dimensions that can overlap.
+
+The complete real-source 2022 Census validation successfully loaded:
+
+- **92,114** government-unit source records;
+- **88,819** governments with finance facts;
+- **1,337,594** normalized finance facts;
+- **211** finance classifications/item codes;
+- a matching **1,337,594-row** compressed Parquet mirror.
+
+A populated official USAspending FY2022 validation also successfully materialized **172 File A rows, 2,557 File B rows, and 828,069 File C rows** into separate Parquet datasets. File A/B/C are distinct grains and are explicitly not additive to one another.
+
+See `docs/DATA_WAREHOUSE_V2.md` for architecture, source semantics, commands, validation results, and release gates.
 
 ## Codespaces / no-Docker run
 
@@ -34,7 +51,7 @@ pip install -e '.[dev]'
 python -m taxtrace.dev_server --reload
 ```
 
-The backend launcher runs Alembic migrations, seeds financing rules, loads/repairs the deterministic federal + Florida + Gainesville fixture layer when needed, rebuilds search, checks federal reconciliation, and then starts FastAPI on internal port 8000.
+The backend launcher runs Alembic migrations, seeds financing rules, loads/repairs the deterministic federal + Florida + Gainesville fixture layer when needed, rebuilds search, checks federal reconciliation, and starts FastAPI on internal port 8000.
 
 Leave it running. In another terminal:
 
@@ -44,7 +61,7 @@ npm install
 npm run dev
 ```
 
-In GitHub Codespaces, open port **3000** from the Ports tab. The frontend uses a same-origin `/api` proxy to the backend inside the Codespace, so the browser does not need to know the forwarded port-8000 URL.
+In GitHub Codespaces, open port **3000** from the Ports tab. The frontend uses a same-origin `/api` proxy to the backend inside the Codespace, so the browser does not need the forwarded port-8000 URL.
 
 Useful routes:
 
@@ -53,7 +70,7 @@ Useful routes:
 - backend `/docs` — FastAPI documentation
 - backend `/health` — API health/version
 
-For a truly local run, the website is normally `http://localhost:3000` and API docs are `http://127.0.0.1:8000/docs`.
+For a local run, the website is normally `http://localhost:3000` and API docs are `http://127.0.0.1:8000/docs`.
 
 ## Deterministic quick-mode example
 
@@ -91,20 +108,23 @@ Example body:
 }
 ```
 
-Federal explorer:
+Other V1 endpoints include:
 
-`POST /v1/explorer/federal`
-
-Search:
-
+- `POST /v1/explorer/federal`
 - `GET /v1/search?q=food%20stamps`
-- `POST /v1/search/federal` for receipt-aware federal search
+- `POST /v1/search/federal`
+- `GET /v1/warehouse/status`
 
-Warehouse status:
+Warehouse V2 endpoints:
 
-`GET /v1/warehouse/status`
+- `GET /v2/data/catalog`
+- `GET /v2/data/stats`
+- `GET /v2/data/governments/search?q=Gainesville`
+- `GET /v2/data/governments/{id}/coverage`
+- `GET /v2/data/governments/{id}/finance`
+- `GET /v2/data/governments/{id}/detail`
 
-The status response distinguishes federal `spend_facts` from state/local `jurisdiction_spend_facts`.
+Raw Census item-code results are marked non-additive. Native components and rollups must not be summed until an explicit additive partition has been constructed.
 
 ## Phase 7 — Florida
 
@@ -134,6 +154,8 @@ See `docs/PHASE_7_8_9A.md` and `docs/PRODUCT_SCOPE.md` for the source and method
 
 ## CLI examples
 
+Core application:
+
 ```bash
 taxtrace tax federal --income 50000 --filing-status single
 taxtrace receipt federal --income 50000 --filing-status single --spending-fiscal-year 2025
@@ -141,11 +163,28 @@ taxtrace search query "food stamps"
 taxtrace warehouse status
 ```
 
-`taxtrace warehouse ingest-fixtures` now loads the deterministic federal and state/local fixture bundle.
+National data warehouse:
+
+```bash
+taxtrace data catalog
+taxtrace data seed
+taxtrace data stats
+taxtrace data bootstrap-national --no-2024-sample
+taxtrace data bootstrap-federal-accounts --fiscal-year 2025 --period 12
+```
+
+Existing source files can be inspected or ingested directly:
+
+```bash
+taxtrace data inspect-census-finance --file /path/to/2022_Individual_Unit_File.zip
+taxtrace data ingest-census-finance --file /path/to/2022_Individual_Unit_File.zip --year 2022
+taxtrace data inspect-usaspending-accounts --file /path/to/accounts.zip
+taxtrace data ingest-usaspending-accounts --file /path/to/accounts.zip --fiscal-year 2025
+```
 
 ## Live federal data ingestion
 
-The project remains fixture-runnable, but live federal commands are available:
+The project remains fixture-runnable. Legacy API-oriented federal ingestion is still available:
 
 ```bash
 taxtrace warehouse ingest-treasury --fiscal-year 2025
@@ -153,9 +192,9 @@ taxtrace warehouse ingest-omb --fiscal-year 2025
 taxtrace warehouse ingest-usaspending --fiscal-year 2025 --agency 012 --include-awards
 ```
 
-A single agency is the recommended live USAspending smoke test because whole-government ingestion can make many requests.
+For large DATA Act account downloads, prefer the Warehouse V2 bulk path. USAspending bulk jobs are asynchronous: TaxTrace polls until a terminal `finished` state before attempting to download the generated archive.
 
-## Tests
+## Tests and release validation
 
 ```bash
 pytest
@@ -163,28 +202,36 @@ ruff check src apps tests
 python -m compileall -q src apps alembic
 ```
 
-GitHub Actions also runs a no-Docker end-to-end job that creates a fresh SQLite database, runs all migrations, bootstraps federal + state/local data, starts FastAPI, exercises the federal and Florida/Gainesville receipts, verifies conservation, builds and starts Next.js, loads `/florida`, and sends the Florida receipt request through the same-origin frontend API proxy.
+Normal GitHub Actions CI also runs migrations, frontend build, no-Docker end-to-end application checks, and a real Census source smoke test.
+
+Two expensive release gates are available as manual workflows:
+
+- **Warehouse Full Import Validation** — imports the complete real 2022 Census government registry and finance census and verifies SQL/Parquet counts;
+- **USAspending Live Archive Validation** — generates a real populated A/B/C archive, waits for `finished`, downloads it, classifies the real schemas, and materializes Parquet.
 
 ## Repository map
 
 ```text
 apps/
-  api/                         FastAPI application
+  api/                         FastAPI application, including /v2/data
   web/                         Next.js UI, including /florida
 src/taxtrace/
   tax/                         federal tax engine
-  finance/                     federal snapshots and ingestion
+  finance/                     federal snapshots and legacy ingestion
   allocation/                  federal receipt engine
   jurisdictional/              phases 7, 8 and 9A
+  warehouse_v2/                national catalog, Census, lake, native, USAspending bulk
+  data/source_catalog_v2.json  authoritative warehouse source manifest
   explorer.py                  federal drill-down engine
   search.py                    federal portable search index
   methodology/                 machine-enforced invariants
   data/statistical/            versioned 9A model data
 data/
-  fixtures/florida/            audited Florida source transcription
-  fixtures/gainesville/        audited Gainesville source transcription
-  fixtures/                    federal deterministic fixtures
+  fixtures/                    deterministic test fixtures
+  raw/                         downloaded source archives, git-ignored
+  warehouse/lake/              normalized Parquet lake, git-ignored
 docs/
+  DATA_WAREHOUSE_V2.md
   PHASE_7_8_9A.md
   PRODUCT_SCOPE.md
   METHODOLOGY.md
