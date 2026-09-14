@@ -24,6 +24,9 @@ jobs:
           from pathlib import Path
 
           from taxtrace.database import SessionLocal
+          from taxtrace.warehouse_v2.usaspending_award_crosswalk import (
+              validate_award_member_crosswalk_keys,
+          )
           from taxtrace.warehouse_v2.usaspending_award_lake import (
               PRIME_DATASET,
               SUBAWARD_DATASET,
@@ -51,6 +54,13 @@ jobs:
           assert ("D2", "assistance") in member_grains, member_grains
           assert ("F", "contract") in member_grains, member_grains
           assert ("F", "assistance") in member_grains, member_grains
+
+          crosswalk_keys = validate_award_member_crosswalk_keys(members)
+          print("crosswalk_keys", crosswalk_keys)
+          assert crosswalk_keys["D1:contract"] == "contract_award_unique_key"
+          assert crosswalk_keys["D2:assistance"] == "assistance_award_unique_key"
+          assert crosswalk_keys["F:contract"] == "prime_award_unique_key"
+          assert crosswalk_keys["F:assistance"] == "prime_award_unique_key"
 
           with SessionLocal() as session:
               warehouse = materialize_requested_awards(session, result, fiscal_year=2022)
