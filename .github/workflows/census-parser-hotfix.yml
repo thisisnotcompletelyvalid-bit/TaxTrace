@@ -1,0 +1,36 @@
+name: Census Parser Hotfix
+
+on:
+  push:
+    branches: [data-overhaul-v1]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: data-overhaul-v1
+      - name: Add official 2022 Census workbook identifier header
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/taxtrace/warehouse_v2/census.py')
+          text = path.read_text()
+          old = '''                    gid_col = _find_column(columns, "governmentunitcode", "governmentunitid", "governmentcode", "governmentid", "govid", "gid")\n'''
+          new = '''                    gid_col = _find_column(\n                        columns,\n                        "census_id_gidid",\n                        "censusidgidid",\n                        "governmentunitcode",\n                        "governmentunitid",\n                        "governmentcode",\n                        "governmentid",\n                        "govid",\n                        "gid",\n                    )\n'''
+          if text.count(old) != 1:
+              raise SystemExit(f'Expected workbook gid lookup once, found {text.count(old)}')
+          path.write_text(text.replace(old, new))
+          PY
+          rm .github/workflows/census-parser-hotfix.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/taxtrace/warehouse_v2/census.py .github/workflows/census-parser-hotfix.yml
+          git commit -m "Parse official Census government workbook IDs"
+          git push origin HEAD:data-overhaul-v1
