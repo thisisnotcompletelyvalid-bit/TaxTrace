@@ -1,8 +1,7 @@
 name: Warehouse Full Import Validation
 
 on:
-  push:
-    branches: [data-overhaul-v1]
+  workflow_dispatch:
 
 jobs:
   full-2022-census:
