@@ -14,6 +14,7 @@ API_ROOT = "https://api.usaspending.gov/api/v2"
 DOWNLOAD_ENDPOINTS = {
     "accounts": f"{API_ROOT}/download/accounts/",
     "awards": f"{API_ROOT}/download/awards/",
+    "bulk_awards": f"{API_ROOT}/bulk_download/awards/",
     "search": f"{API_ROOT}/download/search/",
     "contracts": f"{API_ROOT}/download/contract/",
     "assistance": f"{API_ROOT}/download/assistance/",
@@ -48,7 +49,12 @@ class USASpendingDownloadJob:
 
 
 class USASpendingBulkClient:
-    """Durable client around USAspending's official asynchronous bulk-download surface.
+    """Durable client around USAspending's official asynchronous download surfaces.
+
+    `accounts` targets the DATA Act account download. `bulk_awards` targets the
+    Custom Award Data Download route, which can emit prime award (D1/D2-shaped)
+    and subaward (File F-shaped) data. The plain `awards` kind is retained for
+    the Advanced Search award-download route because its request semantics differ.
 
     USAspending returns the eventual file URL when a job is submitted, before the archive is
     necessarily retrievable. TaxTrace therefore polls the status endpoint whenever a file name
