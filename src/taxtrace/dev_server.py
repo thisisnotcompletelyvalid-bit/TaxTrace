@@ -5,11 +5,10 @@ import json
 import socket
 import subprocess
 import sys
-from pathlib import Path
 
 from alembic import command
 from alembic.config import Config as AlembicConfig
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from taxtrace.config import PROJECT_ROOT, get_settings
 from taxtrace.database import SessionLocal
@@ -31,6 +30,15 @@ def _alembic_config() -> AlembicConfig:
 
 def _warehouse_counts() -> dict[str, int]:
     with SessionLocal() as session:
+        phase46_detail = session.scalar(
+            select(func.count(OMBAccountRecord.id)).where(
+                OMBAccountRecord.fiscal_year == 2025,
+                or_(
+                    and_(OMBAccountRecord.agency_code == "012", OMBAccountRecord.account_code == "3505"),
+                    and_(OMBAccountRecord.agency_code == "009", OMBAccountRecord.account_code == "5700"),
+                ),
+            )
+        ) or 0
         return {
             "treasury_rows": session.scalar(
                 select(func.count(TreasuryAggregate.id)).where(TreasuryAggregate.fiscal_year == 2025)
@@ -40,6 +48,7 @@ def _warehouse_counts() -> dict[str, int]:
                 select(func.count(OMBAccountRecord.id)).where(OMBAccountRecord.fiscal_year == 2025)
             )
             or 0,
+            "phase46_omb_detail_rows": phase46_detail,
             "awards": session.scalar(
                 select(func.count(Award.id)).where(Award.fiscal_year == 2025)
             )
@@ -56,14 +65,15 @@ def _warehouse_counts() -> dict[str, int]:
 
 
 def _fixture_layer_complete(counts: dict[str, int]) -> bool:
-    """Recognize the Phase 4-6 deterministic development fixture layer.
+    """Recognize the deterministic fixture capabilities required by phases 4-6.
 
-    Older Phase 0-3 local databases have Treasury/OMB data but no award/search/program detail.
-    Those databases need one fixture refresh after migration.
+    Older Phase 0-3 databases can contain Treasury/OMB rows but lack the specific Medicare/SNAP
+    supplement, award data, search index, and account-linked program activity used by the UI.
     """
     return (
         counts["treasury_rows"] >= 32
-        and counts["omb_rows"] >= 8
+        and counts["omb_rows"] >= 1
+        and counts["phase46_omb_detail_rows"] >= 2
         and counts["awards"] >= 2
         and counts["search_documents"] >= 40
         and counts["program_activity_facts"] >= 1
