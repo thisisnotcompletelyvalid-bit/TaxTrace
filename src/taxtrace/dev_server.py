@@ -16,6 +16,8 @@ from taxtrace.db_models import Award, OMBAccountRecord, SearchDocument, SpendFac
 from taxtrace.finance.fixtures import ingest_all_fixtures
 from taxtrace.finance.reconcile import reconcile_omb_outlays_to_treasury
 from taxtrace.finance.seed import seed_federal_methodology_entities
+from taxtrace.jurisdictional.db_models import JurisdictionSpendFact
+from taxtrace.jurisdictional.fixtures import ingest_jurisdiction_fixtures
 from taxtrace.methodology.invariants import validate_revenue_pool_shares
 from taxtrace.search import rebuild_search_index
 
@@ -61,15 +63,16 @@ def _warehouse_counts() -> dict[str, int]:
                 )
             )
             or 0,
+            "jurisdiction_spend_facts": session.scalar(
+                select(func.count(JurisdictionSpendFact.id)).where(
+                    JurisdictionSpendFact.fiscal_year == 2025
+                )
+            )
+            or 0,
         }
 
 
 def _fixture_layer_complete(counts: dict[str, int]) -> bool:
-    """Recognize the deterministic fixture capabilities required by phases 4-6.
-
-    Older Phase 0-3 databases can contain Treasury/OMB rows but lack the specific Medicare/SNAP
-    supplement, award data, search index, and account-linked program activity used by the UI.
-    """
     return (
         counts["treasury_rows"] >= 32
         and counts["omb_rows"] >= 1
@@ -77,6 +80,7 @@ def _fixture_layer_complete(counts: dict[str, int]) -> bool:
         and counts["awards"] >= 2
         and counts["search_documents"] >= 40
         and counts["program_activity_facts"] >= 1
+        and counts["jurisdiction_spend_facts"] >= 16
     )
 
 
@@ -97,6 +101,7 @@ def bootstrap_local_database(*, refresh_fixtures: bool = False) -> dict[str, obj
     if refreshed:
         with SessionLocal() as session:
             ingest_all_fixtures(session, root=PROJECT_ROOT / "data" / "fixtures")
+            ingest_jurisdiction_fixtures(session, root=PROJECT_ROOT / "data" / "fixtures")
             rebuild_search_index(session)
 
     after = _warehouse_counts()
@@ -146,12 +151,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--refresh-fixtures",
         action="store_true",
-        help="Force a deterministic fixture refresh before starting the API.",
+        help="Force deterministic federal + state/local fixture refresh before starting the API.",
     )
     parser.add_argument(
         "--check-only",
         action="store_true",
-        help="Migrate/bootstrap/verify the local backend and exit without starting Uvicorn.",
+        help="Migrate/bootstrap/verify the backend and exit without starting Uvicorn.",
     )
     return parser
 

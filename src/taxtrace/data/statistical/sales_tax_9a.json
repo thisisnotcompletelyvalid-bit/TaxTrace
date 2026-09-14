@@ -1,0 +1,43 @@
+{
+  "model_version": "sales-tax-9a-v1",
+  "reference_year": 2024,
+  "source_url": "https://www.bls.gov/news.release/cesan.htm",
+  "all_consumer_units_total": 78535,
+  "quintiles": [
+    {"name": "lowest", "lower_bound": 0, "upper_bound": 29932, "annual_expenditures": 35046},
+    {"name": "second", "lower_bound": 29932, "upper_bound": 57452, "annual_expenditures": 50054},
+    {"name": "third", "lower_bound": 57452, "upper_bound": 94511, "annual_expenditures": 66900},
+    {"name": "fourth", "lower_bound": 94511, "upper_bound": 155925, "annual_expenditures": 89972},
+    {"name": "highest", "lower_bound": 155925, "upper_bound": null, "annual_expenditures": 150342}
+  ],
+  "categories": [
+    {"code": "food_at_home", "label": "Food at home", "baseline": 6224, "taxability": 0.0},
+    {"code": "food_away", "label": "Food away from home", "baseline": 3945, "taxability": 1.0},
+    {"code": "alcohol", "label": "Alcoholic beverages", "baseline": 643, "taxability": 1.0},
+    {"code": "apparel", "label": "Apparel and services", "baseline": 2001, "taxability": 0.85},
+    {"code": "vehicle_purchases", "label": "Vehicle purchases (net outlay)", "baseline": 5337, "taxability": 1.0, "local_cap_approximation": true},
+    {"code": "gasoline", "label": "Gasoline", "baseline": 2411, "taxability": 0.0},
+    {"code": "other_vehicle", "label": "Other vehicle expenses", "baseline": 4206, "taxability": 0.35},
+    {"code": "public_transport", "label": "Public and other transportation", "baseline": 1131, "taxability": 0.0},
+    {"code": "healthcare", "label": "Healthcare", "baseline": 6197, "taxability": 0.05},
+    {"code": "entertainment", "label": "Entertainment", "baseline": 3609, "taxability": 0.60},
+    {"code": "personal_care", "label": "Personal care products and services", "baseline": 978, "taxability": 0.60},
+    {"code": "reading", "label": "Reading", "baseline": 125, "taxability": 1.0},
+    {"code": "education", "label": "Education", "baseline": 1569, "taxability": 0.10},
+    {"code": "tobacco", "label": "Tobacco products and smoking supplies", "baseline": 352, "taxability": 1.0},
+    {"code": "miscellaneous", "label": "Miscellaneous", "baseline": 1218, "taxability": 0.50},
+    {"code": "cash_contributions", "label": "Cash contributions", "baseline": 2292, "taxability": 0.0},
+    {"code": "insurance_pensions", "label": "Personal insurance and pensions", "baseline": 9797, "taxability": 0.0},
+    {"code": "housekeeping", "label": "Housekeeping supplies", "baseline": 877, "taxability": 1.0},
+    {"code": "furnishings", "label": "Household furnishings and equipment", "baseline": 2414, "taxability": 1.0}
+  ],
+  "florida_state_rate": 0.06,
+  "alachua_surtax_rate": 0.015,
+  "local_tangible_property_cap": 5000,
+  "notes": [
+    "Quick-mode wage income is used as a proxy for BLS income before taxes.",
+    "Category taxability shares are TaxTrace model assumptions, not BLS estimates or statutory tax rulings.",
+    "The $5,000 Alachua surtax cap is transaction-specific in law; Phase 9A approximates it only for the modeled annual vehicle-purchase component.",
+    "Fuel taxes, property taxes, utility taxes, and other non-general-sales taxes are outside this Phase 9A model."
+  ]
+}

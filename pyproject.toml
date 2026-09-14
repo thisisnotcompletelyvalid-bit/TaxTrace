@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taxtrace"
-version = "0.2.0"
-description = "Auditable tax-liability and federal finance warehouse foundation for a 'where do my taxes go?' product."
+version = "0.3.0"
+description = "Auditable federal, Florida, and local tax-attribution and public-finance explorer."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}

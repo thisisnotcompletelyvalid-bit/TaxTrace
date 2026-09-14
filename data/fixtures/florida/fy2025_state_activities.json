@@ -1,0 +1,21 @@
+{
+  "jurisdiction_code": "FL",
+  "jurisdiction_name": "Florida",
+  "jurisdiction_level": "STATE",
+  "fiscal_year": 2025,
+  "record_scope": "state_acfr_governmental_activities",
+  "source_name": "State of Florida FY2025 Annual Comprehensive Financial Report — Statement of Activities",
+  "source_url": "https://flauditor.gov/pages/pdf_files/2025%20annual%20comprehensive%20financial%20report.pdf",
+  "reference_period": "FY2025 (year ended June 30, 2025)",
+  "transcription_note": "Official audited Statement of Activities values are reported in thousands in the ACFR and converted here to dollars.",
+  "rows": [
+    {"code": "general_government", "name": "General government", "amount": "14276367000"},
+    {"code": "education", "name": "Education", "amount": "32917331000"},
+    {"code": "human_services", "name": "Human services", "amount": "58397336000"},
+    {"code": "criminal_justice_corrections", "name": "Criminal justice and corrections", "amount": "6864942000"},
+    {"code": "natural_resources_environment", "name": "Natural resources and environment", "amount": "6452542000"},
+    {"code": "transportation", "name": "Transportation", "amount": "7876858000"},
+    {"code": "judicial_branch", "name": "Judicial branch", "amount": "773867000"},
+    {"code": "indirect_interest", "name": "Indirect interest on long-term debt", "amount": "122380000"}
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "jurisdiction_code": "FL-GAINESVILLE",
+  "jurisdiction_name": "Gainesville",
+  "jurisdiction_level": "MUNICIPAL",
+  "parent_code": "FL-ALACHUA",
+  "fiscal_year": 2025,
+  "record_scope": "city_acfr_governmental_activities",
+  "source_name": "City of Gainesville FY2025 Annual Comprehensive Financial Report — Statement of Activities",
+  "source_url": "https://flauditor.gov/pages/mun_efile%20rpts/2025%20gainesville.pdf",
+  "reference_period": "FY2025 (year ended September 30, 2025)",
+  "transcription_note": "Official audited governmental-activity expenses in dollars. Business-type activities are excluded from this additive city-government reference view.",
+  "rows": [
+    {"code": "general_government", "name": "General government", "amount": "38315458"},
+    {"code": "public_safety", "name": "Public safety", "amount": "84275398"},
+    {"code": "physical_environment", "name": "Physical environment", "amount": "566110"},
+    {"code": "transportation", "name": "Transportation", "amount": "27491497"},
+    {"code": "economic_environment", "name": "Economic environment", "amount": "12185430"},
+    {"code": "human_services", "name": "Human services", "amount": "12446"},
+    {"code": "culture_recreation", "name": "Culture and recreation", "amount": "13667017"},
+    {"code": "interest_long_term_debt", "name": "Interest on long-term debt", "amount": "9302382"}
+  ]
+}
