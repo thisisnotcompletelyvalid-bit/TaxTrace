@@ -4,7 +4,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from apps.api.app.routers import data_v2, explorer, health, methodology, receipt, search, tax, warehouse
+from apps.api.app.routers import (
+    data_v2,
+    explorer,
+    health,
+    methodology,
+    receipt,
+    receipt_v2,
+    search,
+    tax,
+    warehouse,
+)
 
 app = FastAPI(
     title="TaxTrace API",
@@ -33,3 +43,4 @@ app.include_router(search.router, prefix="/v1")
 app.include_router(warehouse.router, prefix="/v1")
 app.include_router(methodology.router, prefix="/v1")
 app.include_router(data_v2.router, prefix="/v2")
+app.include_router(receipt_v2.router, prefix="/v2")
