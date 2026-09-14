@@ -43,6 +43,111 @@ def stats(session: Session = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/datasets/{dataset_key}/releases")
+def dataset_releases(
+    dataset_key: str,
+    session: Session = Depends(get_db),
+) -> dict:
+    dataset = session.scalar(
+        select(DatasetDefinition).where(DatasetDefinition.key == dataset_key)
+    )
+    if dataset is None:
+        raise HTTPException(404, "Dataset not found")
+
+    releases = session.scalars(
+        select(DatasetRelease)
+        .where(DatasetRelease.dataset_id == dataset.id)
+        .order_by(DatasetRelease.reference_year.desc(), DatasetRelease.release_key.desc())
+    ).all()
+    object_counts = dict(
+        session.execute(
+            select(BulkObject.dataset_release_id, func.count(BulkObject.id))
+            .where(BulkObject.dataset_release_id.in_([release.id for release in releases]))
+            .group_by(BulkObject.dataset_release_id)
+        ).all()
+    ) if releases else {}
+
+    return {
+        "dataset": {
+            "key": dataset.key,
+            "name": dataset.name,
+            "authority": dataset.authority,
+            "grain": dataset.grain,
+            "coverage_level": dataset.coverage_level,
+            "ingestion_status": dataset.ingestion_status,
+            "source_url": dataset.source_url,
+            "documentation_url": dataset.documentation_url,
+            "metadata": dataset.metadata_json,
+        },
+        "releases": [
+            {
+                "release_key": release.release_key,
+                "reference_year": release.reference_year,
+                "reference_period": release.reference_period,
+                "status": release.status,
+                "coverage_type": release.coverage_type,
+                "row_count": release.row_count,
+                "government_count": release.government_count,
+                "classification_count": release.classification_count,
+                "raw_bytes": release.raw_bytes,
+                "normalized_bytes": release.normalized_bytes,
+                "ingested_at": release.ingested_at,
+                "bulk_object_count": object_counts.get(release.id, 0),
+                "metadata": release.metadata_json,
+            }
+            for release in releases
+        ],
+    }
+
+
+@router.get("/datasets/{dataset_key}/releases/{release_key}/objects")
+def dataset_release_objects(
+    dataset_key: str,
+    release_key: str,
+    session: Session = Depends(get_db),
+) -> dict:
+    row = session.execute(
+        select(DatasetDefinition, DatasetRelease)
+        .join(DatasetRelease, DatasetRelease.dataset_id == DatasetDefinition.id)
+        .where(
+            DatasetDefinition.key == dataset_key,
+            DatasetRelease.release_key == release_key,
+        )
+    ).first()
+    if row is None:
+        raise HTTPException(404, "Dataset release not found")
+    dataset, release = row
+
+    objects = session.scalars(
+        select(BulkObject)
+        .where(BulkObject.dataset_release_id == release.id)
+        .order_by(BulkObject.layer, BulkObject.object_key)
+    ).all()
+    return {
+        "dataset_key": dataset.key,
+        "release_key": release.release_key,
+        "grain": dataset.grain,
+        "additive_across_objects": False,
+        "warning": (
+            "Lake objects preserve native source partitions and schemas. Do not sum objects "
+            "across grains or families unless an explicit additive partition says it is safe."
+        ),
+        "objects": [
+            {
+                "object_key": obj.object_key,
+                "storage_format": obj.storage_format,
+                "layer": obj.layer,
+                "partition": obj.partition_json,
+                "sha256": obj.sha256,
+                "row_count": obj.row_count,
+                "byte_count": obj.byte_count,
+                "metadata": obj.metadata_json,
+            }
+            for obj in objects
+        ],
+    }
+
+
 @router.get("/governments/search")
 def government_search(
     q: str = Query(min_length=2),
