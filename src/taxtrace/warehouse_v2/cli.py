@@ -27,6 +27,10 @@ from taxtrace.warehouse_v2.db_models import (
     GovernmentIdentifier,
 )
 from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient, load_payload
+from taxtrace.warehouse_v2.usaspending_lake import (
+    inspect_account_archive,
+    materialize_account_archive,
+)
 
 app = typer.Typer(help="TaxTrace national multi-jurisdiction public-finance warehouse.")
 
@@ -165,13 +169,54 @@ def bootstrap_national(
     typer.echo(json.dumps(result, indent=2))
 
 
+@app.command("inspect-usaspending-accounts")
+def inspect_usaspending_accounts(
+    file: Path = typer.Option(..., "--file", exists=True),
+) -> None:
+    members = inspect_account_archive(file)
+    typer.echo(
+        json.dumps(
+            [
+                {
+                    "member": member.member_name,
+                    "submission_type": member.submission_type,
+                    "dataset_key": member.dataset_key,
+                    "columns": list(member.columns),
+                }
+                for member in members
+            ],
+            indent=2,
+        )
+    )
+
+
+@app.command("ingest-usaspending-accounts")
+def ingest_usaspending_accounts(
+    file: Path = typer.Option(..., "--file", exists=True),
+    fiscal_year: int = typer.Option(..., "--fiscal-year"),
+    request_json: Path | None = typer.Option(
+        None, "--request-json", exists=True, help="Optional exact USAspending request JSON"
+    ),
+) -> None:
+    request = json.loads(request_json.read_text()) if request_json else None
+    with SessionLocal() as session:
+        seed_catalog(session)
+        result = materialize_account_archive(
+            session,
+            file,
+            fiscal_year=fiscal_year,
+            request=request,
+        )
+    typer.echo(json.dumps(result, indent=2))
+
+
 @app.command("bootstrap-federal-accounts")
 def bootstrap_federal_accounts(
     fiscal_year: int = typer.Option(2025, "--fiscal-year"),
     period: int = typer.Option(12, "--period", min=1, max=12),
     wait: bool = typer.Option(True, "--wait/--no-wait"),
 ) -> None:
-    """Request all-agency USAspending File A/B/C account data for a fiscal year."""
+    """Request, download, and normalize all-agency USAspending File A/B/C account data."""
     payload = {
         "account_level": "treasury_account",
         "file_format": "csv",
@@ -189,6 +234,7 @@ def bootstrap_federal_accounts(
     client = USASpendingBulkClient()
     job = client.submit("accounts", payload)
     response = client.wait(job) if wait else job.response
+    result: dict[str, object] = {"request": payload, "response": response}
     if wait:
         url = response.get("file_url") or response.get("download_url") or response.get("url")
         if url:
@@ -199,8 +245,16 @@ def bootstrap_federal_accounts(
                 / Path(url.split("?", 1)[0]).name
             )
             client.download_completed(response, destination)
-            response = {**response, "taxtrace_local_path": str(destination)}
-    typer.echo(json.dumps({"request": payload, "response": response}, indent=2))
+            with SessionLocal() as session:
+                seed_catalog(session)
+                result["warehouse"] = materialize_account_archive(
+                    session,
+                    destination,
+                    fiscal_year=fiscal_year,
+                    request=payload,
+                )
+            result["response"] = {**response, "taxtrace_local_path": str(destination)}
+    typer.echo(json.dumps(result, indent=2))
 
 
 @app.command("usaspending-submit")
