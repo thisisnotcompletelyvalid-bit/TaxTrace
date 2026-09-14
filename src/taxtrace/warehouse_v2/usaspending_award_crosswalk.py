@@ -17,12 +17,17 @@ class AwardMemberLike(Protocol):
 
 @dataclass(frozen=True)
 class AwardCrosswalk:
-    """A non-additive relationship between USAspending grains.
+    """A non-additive identity relationship between USAspending grains.
 
     The participating download columns are aliases of USAspending's canonical
-    generated_unique_award_id / Broker unique_award_key.  These relationships
-    are for enrichment and drill-down only; they never create another pool of
-    federal spending to add to File C, D1/D2, or File F totals.
+    generated_unique_award_id / Broker unique_award_key.  D1/D2 are transaction
+    grains and File C can also contain repeated award identities, so these keys
+    must not be used as an unconstrained row-to-row join: doing so can create a
+    many-to-many fan-out.  Collapse or otherwise constrain each side to the
+    intended award-identity grain before enrichment.
+
+    These relationships are for enrichment and drill-down only; they never
+    create another pool of federal spending to add to File C, D1/D2, or File F.
     """
 
     name: str
@@ -34,6 +39,7 @@ class AwardCrosswalk:
     target_key: str
     award_family: str
     cardinality: str
+    requires_identity_collapse: bool = True
     additive: bool = False
     canonical_key: str = CANONICAL_AWARD_KEY
 
@@ -48,7 +54,7 @@ AWARD_CROSSWALKS: tuple[AwardCrosswalk, ...] = (
         target_data_class="D1",
         target_key="contract_award_unique_key",
         award_family="contract",
-        cardinality="many_financial_rows_to_one_prime_award",
+        cardinality="many_file_c_rows_to_many_prime_transactions_via_award_identity",
     ),
     AwardCrosswalk(
         name="file_c_to_d2_assistance",
@@ -59,7 +65,7 @@ AWARD_CROSSWALKS: tuple[AwardCrosswalk, ...] = (
         target_data_class="D2",
         target_key="assistance_award_unique_key",
         award_family="assistance",
-        cardinality="many_financial_rows_to_one_prime_award",
+        cardinality="many_file_c_rows_to_many_prime_transactions_via_award_identity",
     ),
     AwardCrosswalk(
         name="d1_contract_to_file_f",
@@ -70,7 +76,7 @@ AWARD_CROSSWALKS: tuple[AwardCrosswalk, ...] = (
         target_data_class="F",
         target_key="prime_award_unique_key",
         award_family="contract",
-        cardinality="one_prime_award_to_many_subawards",
+        cardinality="many_prime_transactions_to_many_subawards_via_award_identity",
     ),
     AwardCrosswalk(
         name="d2_assistance_to_file_f",
@@ -81,7 +87,7 @@ AWARD_CROSSWALKS: tuple[AwardCrosswalk, ...] = (
         target_data_class="F",
         target_key="prime_award_unique_key",
         award_family="assistance",
-        cardinality="one_prime_award_to_many_subawards",
+        cardinality="many_prime_transactions_to_many_subawards_via_award_identity",
     ),
 )
 
