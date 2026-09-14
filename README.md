@@ -16,9 +16,9 @@ The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATE
 - **Phase 7:** modeled Florida state sales tax attributed across FY2025 audited State of Florida governmental-activity expenses.
 - **Phase 8:** Alachua County surtax routed through its dedicated school-capital, Wild Spaces & Public Places, and infrastructure purposes; Gainesville FY2025 audited governmental spending is available as a non-additive actual reference.
 - **Phase 9A:** statistical quick-mode sales-tax estimation using 2024 BLS Consumer Expenditure income-quintile data and an explicit Florida taxability matrix. It does **not** use `income × sales-tax rate`.
-- **Warehouse V2:** national Census government registry and finance ingestion, SQL + Parquet lake storage, coverage metadata, native-ledger schema, and validated USAspending DATA Act File A/B/C bulk ingestion.
+- **Warehouse V2:** national Census government registry and finance ingestion, SQL + Parquet lake storage, coverage metadata, native-ledger schema, validated USAspending DATA Act File A/B/C account ingestion, and live-validated D1/D2 prime-transaction + File F subaward ingestion.
 
-Methodology version: **1.2.0**. Application version: **0.4.0**.
+Methodology version: **1.2.0**. Application version: **0.5.0**.
 
 ## National warehouse status
 
@@ -32,7 +32,27 @@ The complete real-source 2022 Census validation successfully loaded:
 - **211** finance classifications/item codes;
 - a matching **1,337,594-row** compressed Parquet mirror.
 
-A populated official USAspending FY2022 validation also successfully materialized **172 File A rows, 2,557 File B rows, and 828,069 File C rows** into separate Parquet datasets. File A/B/C are distinct grains and are explicitly not additive to one another.
+A populated official USAspending FY2022 account validation materialized **172 File A rows, 2,557 File B rows, and 828,069 File C rows** into separate Parquet datasets. File A/B/C are distinct grains and are explicitly not additive to one another.
+
+A separate live Custom Award Data Download validation used the federal-wide **March 1, 2022 action-date slice** and successfully classified and materialized all four required prime/subaward families:
+
+- **29,507 D1 contract prime-transaction rows**;
+- **16,111 D2 assistance prime-transaction rows**;
+- **2,327 contract File F subaward rows**;
+- **4,402 assistance File F subaward rows**.
+
+That is **45,618 D1/D2 prime-transaction rows** and **6,729 File F subaward rows** in the bounded live validation slice.
+
+The archive schema also validated the canonical award-identity path:
+
+```text
+File C award_unique_key
+↔ D1 contract_award_unique_key
+↔ D2 assistance_award_unique_key
+↔ File F prime_award_unique_key
+```
+
+These columns alias USAspending's canonical generated award identity. They are relationship keys, not permission to sum or naively row-join the grains. File C and D1/D2 can repeat the same award identity, so cross-grain enrichment must first collapse or otherwise constrain each side to the intended award-identity grain to avoid many-to-many fan-out. File F remains downstream of the prime award and must never be added beside prime-award spending as another federal expenditure.
 
 See `docs/DATA_WAREHOUSE_V2.md` for architecture, source semantics, commands, validation results, and release gates.
 
@@ -171,6 +191,7 @@ taxtrace data seed
 taxtrace data stats
 taxtrace data bootstrap-national --no-2024-sample
 taxtrace data bootstrap-federal-accounts --fiscal-year 2025 --period 12
+taxtrace data bootstrap-federal-awards --fiscal-year 2025
 ```
 
 Existing source files can be inspected or ingested directly:
@@ -180,7 +201,11 @@ taxtrace data inspect-census-finance --file /path/to/2022_Individual_Unit_File.z
 taxtrace data ingest-census-finance --file /path/to/2022_Individual_Unit_File.zip --year 2022
 taxtrace data inspect-usaspending-accounts --file /path/to/accounts.zip
 taxtrace data ingest-usaspending-accounts --file /path/to/accounts.zip --fiscal-year 2025
+taxtrace data inspect-usaspending-awards --file /path/to/awards.zip
+taxtrace data ingest-usaspending-awards --file /path/to/awards.zip --fiscal-year 2025 --request-json /path/to/request.json
 ```
+
+Manual award ingestion requires the exact request JSON that generated the archive so release provenance cannot silently be invented after the fact.
 
 ## Live federal data ingestion
 
@@ -192,7 +217,7 @@ taxtrace warehouse ingest-omb --fiscal-year 2025
 taxtrace warehouse ingest-usaspending --fiscal-year 2025 --agency 012 --include-awards
 ```
 
-For large DATA Act account downloads, prefer the Warehouse V2 bulk path. USAspending bulk jobs are asynchronous: TaxTrace polls until a terminal `finished` state before attempting to download the generated archive.
+For large DATA Act downloads, prefer the Warehouse V2 bulk paths. USAspending bulk jobs are asynchronous: TaxTrace polls until a terminal `finished` state before attempting to download the generated archive. Award bootstrap uses the distinct Custom Award Data Download endpoint and stores immutable request provenance with the raw archive.
 
 ## Tests and release validation
 
@@ -202,12 +227,13 @@ ruff check src apps tests
 python -m compileall -q src apps alembic
 ```
 
-Normal GitHub Actions CI also runs migrations, frontend build, no-Docker end-to-end application checks, and a real Census source smoke test.
+Normal GitHub Actions CI also runs migrations, frontend build, and no-Docker end-to-end application checks.
 
-Two expensive release gates are available as manual workflows:
+Expensive real-source release gates are manual workflows:
 
 - **Warehouse Full Import Validation** — imports the complete real 2022 Census government registry and finance census and verifies SQL/Parquet counts;
-- **USAspending Live Archive Validation** — generates a real populated A/B/C archive, waits for `finished`, downloads it, classifies the real schemas, and materializes Parquet.
+- **USAspending Live Archive Validation** — generates a real populated A/B/C archive, waits for `finished`, downloads it, classifies the real schemas, and materializes Parquet;
+- **USAspending Prime/Subaward Live Validation** — generates a real D1/D2/File F Custom Award Data Download, validates contract + assistance families and canonical award-identity keys, materializes separate Parquet datasets, and verifies nonzero parts.
 
 ## Repository map
 

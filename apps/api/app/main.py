@@ -8,7 +8,7 @@ from apps.api.app.routers import data_v2, explorer, health, methodology, receipt
 
 app = FastAPI(
     title="TaxTrace API",
-    version="0.4.0",
+    version="0.5.0",
     description="Tax attribution plus a national multi-jurisdiction public-finance warehouse.",
 )
 app.add_middleware(

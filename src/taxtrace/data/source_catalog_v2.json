@@ -1,5 +1,5 @@
 {
-  "catalog_version": "2.0.0",
+  "catalog_version": "2.2.0",
   "sources": [
     {
       "key": "census-government-units-2022",
@@ -147,15 +147,15 @@
     {
       "key": "usaspending-file-d1-d2",
       "authority": "USAspending.gov / U.S. Treasury",
-      "name": "USAspending Prime Award and Awardee Attributes",
+      "name": "USAspending Prime Award and Awardee Transactions",
       "grain": "prime_award_transaction",
       "coverage_level": "FEDERAL_ALL",
-      "source_url": "https://api.usaspending.gov/api/v2/download/awards/",
+      "source_url": "https://api.usaspending.gov/api/v2/bulk_download/awards/",
       "documentation_url": "https://www.usaspending.gov/data-sources",
       "bulk_available": true,
-      "ingestion_status": "BULK_FRAMEWORK",
+      "ingestion_status": "IMPLEMENTED",
       "priority": 20,
-      "metadata": {"submission_file": "D1_D2"}
+      "metadata": {"submission_file": "D1_D2", "native_families": ["contract", "assistance"], "canonical_award_identity": "generated_unique_award_id", "contract_key": "contract_award_unique_key", "assistance_key": "assistance_award_unique_key", "additive_across_families": false, "join_requires_identity_collapse": true}
     },
     {
       "key": "usaspending-file-f",
@@ -163,12 +163,12 @@
       "name": "USAspending Subaward Data",
       "grain": "subaward",
       "coverage_level": "FEDERAL_ALL",
-      "source_url": "https://api.usaspending.gov/api/v2/download/awards/",
+      "source_url": "https://api.usaspending.gov/api/v2/bulk_download/awards/",
       "documentation_url": "https://www.usaspending.gov/data-sources",
       "bulk_available": true,
-      "ingestion_status": "BULK_FRAMEWORK",
+      "ingestion_status": "IMPLEMENTED",
       "priority": 25,
-      "metadata": {"submission_file": "F"}
+      "metadata": {"submission_file": "F", "native_families": ["contract", "assistance"], "canonical_award_identity": "generated_unique_award_id", "prime_award_key": "prime_award_unique_key", "additive_with_prime_awards": false, "join_requires_identity_collapse": true}
     },
     {
       "key": "native-state-ledgers",

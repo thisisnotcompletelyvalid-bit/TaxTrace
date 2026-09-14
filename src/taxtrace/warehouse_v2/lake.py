@@ -49,8 +49,15 @@ class LakeStore:
             for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                 digest.update(chunk)
                 size += len(chunk)
-        object_key = str(path.relative_to(root)) if root and path.is_relative_to(root) else str(path)
-        return LakeObjectInfo(object_key, path, digest.hexdigest(), size)
+        sha256 = digest.hexdigest()
+        if root and path.is_relative_to(root):
+            object_key = str(path.relative_to(root))
+        else:
+            # Raw source archives often live under data/raw rather than the lake
+            # root. Use a stable content-addressed logical key instead of storing
+            # an absolute host filesystem path in warehouse metadata.
+            object_key = f"external/{sha256}/{path.name}"
+        return LakeObjectInfo(object_key, path, sha256, size)
 
     def register_file(
         self,
