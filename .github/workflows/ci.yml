@@ -36,7 +36,7 @@ jobs:
       - run: npm install
       - run: npm run build
         env:
-          NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
+          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
 
   no-docker-e2e:
     runs-on: ubuntu-latest
@@ -54,15 +54,13 @@ jobs:
           node-version: '22'
       - run: python -m pip install -U pip
       - run: pip install -e '.[dev]'
-      - name: Bootstrap fresh SQLite warehouse
+      - name: Bootstrap backend from a non-root working directory
+        working-directory: apps/web
+        run: python -m taxtrace.dev_server --check-only
+      - name: Start API from a non-root working directory
+        working-directory: apps/web
         run: |
-          alembic upgrade head
-          taxtrace warehouse seed
-          taxtrace warehouse ingest-fixtures
-          taxtrace warehouse reconcile --fiscal-year 2025
-      - name: Start API
-        run: |
-          uvicorn apps.api.app.main:app --host 127.0.0.1 --port 8000 > /tmp/taxtrace-api.log 2>&1 &
+          python -m taxtrace.dev_server > /tmp/taxtrace-api.log 2>&1 &
           echo $! > /tmp/taxtrace-api.pid
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:8000/health > /dev/null; then
