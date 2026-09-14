@@ -16,9 +16,13 @@ jobs:
       - name: Generate and inspect a real USAspending A/B/C account archive
         run: |
           python - <<'PY'
+          import subprocess
+          import time
           from pathlib import Path
           from tempfile import TemporaryDirectory
           from zipfile import ZipFile
+
+          import httpx
 
           from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
 
@@ -42,9 +46,50 @@ jobs:
           print("submit", job.response)
           completed = client.wait(job, poll_seconds=2, max_polls=90)
           print("completed", completed)
+          url = completed.get("file_url") or completed.get("download_url") or completed.get("url")
+          assert url
+
+          browser_ua = (
+              "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/151.0 Safari/537.36"
+          )
+          succeeded = False
+          for delay in (0, 2, 5, 10, 20, 30):
+              if delay:
+                  time.sleep(delay)
+              print("attempt_after_seconds", delay)
+              for label, headers in (
+                  ("httpx-default", {}),
+                  ("httpx-browser", {"User-Agent": browser_ua, "Referer": "https://www.usaspending.gov/"}),
+              ):
+                  try:
+                      response = httpx.get(url, headers=headers, follow_redirects=True, timeout=30)
+                      print(label, response.status_code, response.headers.get("server"), response.headers.get("content-type"), len(response.content))
+                      if response.status_code == 200:
+                          content = response.content
+                          succeeded = True
+                          break
+                  except Exception as exc:
+                      print(label, "ERROR", repr(exc))
+              if succeeded:
+                  break
+              curl = subprocess.run(
+                  ["curl", "-L", "-sS", "-o", "/tmp/usaspending.zip", "-w", "%{http_code} %{size_download}", "-A", browser_ua, "-e", "https://www.usaspending.gov/", url],
+                  text=True,
+                  capture_output=True,
+              )
+              print("curl", curl.returncode, curl.stdout, curl.stderr)
+              if curl.returncode == 0 and curl.stdout.startswith("200 "):
+                  content = Path("/tmp/usaspending.zip").read_bytes()
+                  succeeded = True
+                  break
+
+          if not succeeded:
+              raise SystemExit("USAspending generated file stayed inaccessible after propagation retries")
+
           with TemporaryDirectory() as tmp:
               path = Path(tmp) / (job.file_name or "accounts.zip")
-              client.download_completed(completed, path)
+              path.write_bytes(content)
               print("download_bytes", path.stat().st_size)
               with ZipFile(path) as archive:
                   members = [member for member in archive.infolist() if not member.is_dir()]
