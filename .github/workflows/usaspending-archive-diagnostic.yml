@@ -1,28 +1,37 @@
-name: USAspending Archive Diagnostic
+name: USAspending Live Archive Validation
 
 on:
   push:
     branches: [data-overhaul-v1]
+  workflow_dispatch:
 
 jobs:
-  inspect:
+  validate-live-account-archive:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: sqlite:///./usaspending-live-validation.db
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
-      - name: Compare static and generated USAspending file-host access
+      - run: alembic upgrade head
+      - name: Request, download, and materialize real USAspending A/B/C data
         run: |
           python - <<'PY'
-          import httpx
+          from pathlib import Path
 
+          from taxtrace.database import SessionLocal
+          from taxtrace.warehouse_v2.catalog import seed_catalog
+          from taxtrace.warehouse_v2.lake import LakeStore
           from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
-
-          static_url = "https://files.usaspending.gov/reference_data/def_codes.csv"
-          static = httpx.get(static_url, follow_redirects=True, timeout=30)
-          print("static", static.status_code, static.headers.get("content-type"), len(static.content), repr(static.text[:300]))
+          from taxtrace.warehouse_v2.usaspending_lake import (
+              inspect_account_archive,
+              materialize_account_archive,
+          )
 
           payload = {
               "account_level": "treasury_account",
@@ -39,18 +48,37 @@ jobs:
                   ],
               },
           }
+
           client = USASpendingBulkClient(timeout=90)
           job = client.submit("accounts", payload)
-          completed = client.wait(job, poll_seconds=2, max_polls=90)
-          url = completed.get("file_url") or completed.get("download_url") or completed.get("url")
-          assert url
-          generated = httpx.get(url, follow_redirects=True, timeout=30)
-          print("generated", generated.status_code, generated.headers.get("content-type"), len(generated.content))
-          print("generated_headers", dict(generated.headers))
-          print("generated_body", repr(generated.text[:2000]))
+          completed = client.wait(job, poll_seconds=2, max_polls=240)
+          assert completed.get("status") == "finished", completed
 
-          # This diagnostic succeeds as long as the API job machinery works. The output determines
-          # whether the CDN can be made a mandatory CI gate or must remain an operational fallback.
-          assert completed.get("status") == "ready", completed
-          assert static.status_code == 200, static.status_code
+          destination = Path("data/raw/usaspending/live-validation") / (job.file_name or "accounts.zip")
+          downloaded = client.download_completed(completed, destination)
+          assert downloaded.exists() and downloaded.stat().st_size > 0
+
+          inspected = inspect_account_archive(downloaded)
+          submission_types = {member.submission_type for member in inspected}
+          print("members", [(member.member_name, member.submission_type, len(member.columns)) for member in inspected])
+          assert submission_types == {"A", "B", "C"}, submission_types
+
+          with SessionLocal() as session:
+              seed_catalog(session)
+              result = materialize_account_archive(
+                  session,
+                  downloaded,
+                  fiscal_year=2022,
+                  request=payload,
+              )
+
+          print(result)
+          files = result["submission_files"]
+          assert set(files) == {"A", "B", "C"}
+          for submission_type in ("A", "B", "C"):
+              assert files[submission_type]["rows"] > 0, files[submission_type]
+              assert files[submission_type]["parquet_objects"], files[submission_type]
+              for object_key in files[submission_type]["parquet_objects"]:
+                  path = LakeStore().root / object_key
+                  assert path.exists() and path.stat().st_size > 0, path
           PY
