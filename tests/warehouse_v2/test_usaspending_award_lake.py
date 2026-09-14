@@ -9,6 +9,7 @@ from taxtrace.warehouse_v2.lake import LakeStore
 from taxtrace.warehouse_v2.usaspending_award_lake import (
     PRIME_DATASET,
     SUBAWARD_DATASET,
+    award_release_identity,
     classify_award_columns,
     inspect_award_archive,
     materialize_award_archive,
@@ -37,6 +38,30 @@ def test_classify_prime_and_subaward_grains() -> None:
 def test_file_f_requires_family_marker() -> None:
     with pytest.raises(ValueError, match="do not identify contract vs assistance"):
         classify_award_columns(["prime_award_unique_key", "subaward_number", "subaward_amount"])
+
+
+def test_award_release_identity_distinguishes_full_year_and_slice() -> None:
+    full = award_release_identity(
+        2022,
+        {"filters": {"date_range": {"start_date": "2021-10-01", "end_date": "2022-09-30"}}},
+    )
+    assert full.release_key == "FY2022"
+    assert full.reference_period == "FY2022"
+    assert full.coverage_type == "FEDERAL_AWARD"
+
+    sliced = award_release_identity(
+        2022,
+        {"filters": {"date_range": {"start_date": "2022-03-01", "end_date": "2022-03-07"}}},
+    )
+    assert sliced.release_key == "FY2022_2022-03-01_2022-03-07"
+    assert sliced.reference_period == "2022-03-01/2022-03-07"
+    assert sliced.coverage_type == "FEDERAL_AWARD_SLICE"
+
+    normalized = award_release_identity(
+        2022,
+        {"filters": {"time_period": [{"start_date": "2022-04-01", "end_date": "2022-04-02"}]}},
+    )
+    assert normalized.release_key == "FY2022_2022-04-01_2022-04-02"
 
 
 def test_materialize_usaspending_award_archive(db_session, tmp_path: Path) -> None:
@@ -90,6 +115,8 @@ def test_materialize_usaspending_award_archive(db_session, tmp_path: Path) -> No
         lake=lake,
     )
 
+    assert result["release_key"] == "FY2022"
+    assert result["datasets"][PRIME_DATASET]["release_key"] == "FY2022"
     assert result["datasets"][PRIME_DATASET]["rows"] == 2
     assert result["datasets"][PRIME_DATASET]["members"] == 2
     assert result["datasets"][SUBAWARD_DATASET]["rows"] == 2
