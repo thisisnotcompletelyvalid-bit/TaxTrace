@@ -15,6 +15,7 @@ from taxtrace.warehouse_v2.census import (
     ingest_government_units_zip,
     inspect_finance_zip,
 )
+from taxtrace.warehouse_v2.census_lake import materialize_finance_parquet
 from taxtrace.warehouse_v2.db_models import (
     BulkObject,
     CoverageRecord,
@@ -45,15 +46,20 @@ def seed() -> None:
 @app.command("stats")
 def stats() -> None:
     models = {
-        "datasets": DatasetDefinition, "releases": DatasetRelease,
+        "datasets": DatasetDefinition,
+        "releases": DatasetRelease,
         "government_identifiers": GovernmentIdentifier,
         "finance_classifications": FinanceClassification,
         "government_finance_facts": GovernmentFinanceFact,
         "detailed_spend_facts": DetailedSpendFact,
-        "coverage_records": CoverageRecord, "bulk_objects": BulkObject,
+        "coverage_records": CoverageRecord,
+        "bulk_objects": BulkObject,
     }
     with SessionLocal() as session:
-        result = {name: session.scalar(select(func.count(model.id))) or 0 for name, model in models.items()}
+        result = {
+            name: session.scalar(select(func.count(model.id))) or 0
+            for name, model in models.items()
+        }
     typer.echo(json.dumps(result, indent=2))
 
 
@@ -78,20 +84,84 @@ def ingest_census_finance(
     year: int = typer.Option(..., "--year"),
     coverage: str = typer.Option("CENSUS", "--coverage"),
     dataset_key: str | None = typer.Option(None, "--dataset-key"),
+    materialize_parquet: bool = typer.Option(
+        True, "--materialize-parquet/--no-materialize-parquet"
+    ),
 ) -> None:
+    resolved_key = dataset_key or f"census-gov-finance-{year}"
     with SessionLocal() as session:
-        result = ingest_finance_zip(session, file, year=year, coverage_type=coverage.upper(), dataset_key=dataset_key)
+        result = ingest_finance_zip(
+            session,
+            file,
+            year=year,
+            coverage_type=coverage.upper(),
+            dataset_key=resolved_key,
+        )
+        if materialize_parquet:
+            result["parquet"] = materialize_finance_parquet(
+                session,
+                file,
+                dataset_key=resolved_key,
+                year=year,
+            )
+    typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("materialize-census-finance")
+def materialize_census_finance(
+    file: Path = typer.Option(..., "--file", exists=True),
+    year: int = typer.Option(..., "--year"),
+    dataset_key: str | None = typer.Option(None, "--dataset-key"),
+) -> None:
+    resolved_key = dataset_key or f"census-gov-finance-{year}"
+    with SessionLocal() as session:
+        result = materialize_finance_parquet(
+            session,
+            file,
+            dataset_key=resolved_key,
+            year=year,
+        )
     typer.echo(json.dumps(result, indent=2))
 
 
 @app.command("bootstrap-national")
 def bootstrap_national(
-    include_2024_sample: bool = typer.Option(True, "--include-2024-sample/--no-2024-sample"),
+    include_2024_sample: bool = typer.Option(
+        True, "--include-2024-sample/--no-2024-sample"
+    ),
     overwrite_downloads: bool = typer.Option(False, "--overwrite-downloads"),
+    materialize_parquet: bool = typer.Option(
+        True, "--materialize-parquet/--no-materialize-parquet"
+    ),
 ) -> None:
-    """Download and ingest the national Census government registry and finance baseline."""
+    """Download and ingest the Census national registry + finance baseline and lake copies."""
+    settings = get_settings()
     with SessionLocal() as session:
-        result = bootstrap_national_census(session, include_2024_sample=include_2024_sample, overwrite_downloads=overwrite_downloads)
+        result = bootstrap_national_census(
+            session,
+            include_2024_sample=include_2024_sample,
+            overwrite_downloads=overwrite_downloads,
+        )
+        if materialize_parquet:
+            result["government_finance_2022"]["parquet"] = materialize_finance_parquet(
+                session,
+                settings.raw_data_dir
+                / "census"
+                / "gov_finance"
+                / "2022_Individual_Unit_File.zip",
+                dataset_key="census-gov-finance-2022",
+                year=2022,
+            )
+            if include_2024_sample:
+                result["government_finance_2024"]["parquet"] = materialize_finance_parquet(
+                    session,
+                    settings.raw_data_dir
+                    / "census"
+                    / "gov_finance"
+                    / "2024_Individual_Unit_Files.zip",
+                    dataset_key="census-gov-finance-2024",
+                    year=2024,
+                )
     typer.echo(json.dumps(result, indent=2))
 
 
@@ -109,7 +179,11 @@ def bootstrap_federal_accounts(
             "agency": "all",
             "fy": str(fiscal_year),
             "period": str(period),
-            "submission_types": ["account_balances", "object_class_program_activity", "award_financial"],
+            "submission_types": [
+                "account_balances",
+                "object_class_program_activity",
+                "award_financial",
+            ],
         },
     }
     client = USASpendingBulkClient()
@@ -118,7 +192,12 @@ def bootstrap_federal_accounts(
     if wait:
         url = response.get("file_url") or response.get("download_url") or response.get("url")
         if url:
-            destination = get_settings().raw_data_dir / "usaspending" / str(fiscal_year) / Path(url.split("?", 1)[0]).name
+            destination = (
+                get_settings().raw_data_dir
+                / "usaspending"
+                / str(fiscal_year)
+                / Path(url.split("?", 1)[0]).name
+            )
             client.download_completed(response, destination)
             response = {**response, "taxtrace_local_path": str(destination)}
     typer.echo(json.dumps({"request": payload, "response": response}, indent=2))
@@ -126,7 +205,9 @@ def bootstrap_federal_accounts(
 
 @app.command("usaspending-submit")
 def usaspending_submit(
-    kind: str = typer.Option(..., "--kind", help="accounts, awards, search, contracts, assistance"),
+    kind: str = typer.Option(
+        ..., "--kind", help="accounts, awards, search, contracts, assistance"
+    ),
     payload: Path = typer.Option(..., "--payload", exists=True, help="Exact USAspending JSON request"),
     wait: bool = typer.Option(False, "--wait"),
 ) -> None:
