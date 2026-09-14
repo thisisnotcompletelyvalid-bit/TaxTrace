@@ -117,7 +117,9 @@ def _release(
     metadata = dict(row.metadata_json or {})
     if request is not None:
         metadata["download_request"] = request
-    metadata["submission_file"] = dataset.metadata_json.get("submission_file") if dataset.metadata_json else None
+    metadata["submission_file"] = (
+        dataset.metadata_json.get("submission_file") if dataset.metadata_json else None
+    )
     row.metadata_json = metadata
     row.status = "MATERIALIZING"
     return row
@@ -186,26 +188,11 @@ def materialize_account_archive(
                     "normalized",
                     f"file_{submission_type}_{part_number:04d}.parquet",
                 )
-                if suffix == ".csv":
-                    row_count = lake.csv_to_parquet(extracted, parquet)
-                else:
-                    # DuckDB handles TSV explicitly here rather than relying on extension guessing.
-                    import duckdb
-
-                    connection = duckdb.connect()
-                    try:
-                        connection.execute(
-                            "COPY (SELECT * FROM read_csv_auto(?, header=true, delim='\\t', all_varchar=true, sample_size=-1)) "
-                            "TO ? (FORMAT PARQUET, COMPRESSION ZSTD)",
-                            [str(extracted), str(parquet)],
-                        )
-                        row_count = int(
-                            connection.execute(
-                                "SELECT count(*) FROM read_parquet(?)", [str(parquet)]
-                            ).fetchone()[0]
-                        )
-                    finally:
-                        connection.close()
+                row_count = lake.csv_to_parquet(
+                    extracted,
+                    parquet,
+                    delimiter="\t" if suffix == ".tsv" else ",",
+                )
                 extracted.unlink(missing_ok=True)
 
                 bulk = lake.register_file(
@@ -234,9 +221,7 @@ def materialize_account_archive(
             release.raw_bytes = raw_object.byte_count
             release.normalized_bytes = sum(
                 path.stat().st_size
-                for path in [
-                    lake.root / object_key for object_key in parquet_objects
-                ]
+                for path in [lake.root / object_key for object_key in parquet_objects]
                 if path.exists()
             )
             release.ingested_at = datetime.now(timezone.utc)
