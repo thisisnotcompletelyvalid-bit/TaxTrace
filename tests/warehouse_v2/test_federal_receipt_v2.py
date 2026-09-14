@@ -1,3 +1,5 @@
+import csv
+import io
 from decimal import Decimal
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -72,7 +74,11 @@ def _write_file_b_archive(path: Path) -> None:
             "2",
         ],
     ]
-    payload = ",".join(header) + "\n" + "\n".join(",".join(row) for row in rows) + "\n"
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(header)
+    writer.writerows(rows)
+    payload = output.getvalue()
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         archive.writestr("ObjectClassProgramActivity_1.csv", payload)
 
