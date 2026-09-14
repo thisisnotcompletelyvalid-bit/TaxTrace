@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 
 from apps.api.app.routers import explorer, health, methodology, receipt, search, tax, warehouse
 
@@ -17,6 +18,13 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    return RedirectResponse(url="/docs")
+
+
 app.include_router(health.router)
 app.include_router(tax.router, prefix="/v1")
 app.include_router(receipt.router, prefix="/v1")
