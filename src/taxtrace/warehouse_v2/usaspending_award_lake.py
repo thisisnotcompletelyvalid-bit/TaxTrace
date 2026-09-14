@@ -31,8 +31,8 @@ class AwardReleaseIdentity:
     release_key: str
     reference_period: str
     coverage_type: str
-    start_date: str | None
-    end_date: str | None
+    start_date: str
+    end_date: str
 
 
 def classify_award_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, str]:
@@ -126,20 +126,19 @@ def _request_date_range(request: dict | None) -> tuple[str | None, str | None]:
 
 
 def award_release_identity(fiscal_year: int, request: dict | None) -> AwardReleaseIdentity:
+    if request is None:
+        raise ValueError(
+            "Exact USAspending award request JSON is required to identify the release period"
+        )
+
     full_start = f"{fiscal_year - 1:04d}-10-01"
     full_end = f"{fiscal_year:04d}-09-30"
     start, end = _request_date_range(request)
-
-    if start is None and end is None:
-        return AwardReleaseIdentity(
-            release_key=f"FY{fiscal_year}",
-            reference_period=f"FY{fiscal_year}",
-            coverage_type="FEDERAL_AWARD",
-            start_date=None,
-            end_date=None,
-        )
     if not start or not end:
-        raise ValueError("USAspending award request must provide both start_date and end_date")
+        raise ValueError(
+            "USAspending award request must provide both start_date and end_date for provenance"
+        )
+
     if start == full_start and end == full_end:
         return AwardReleaseIdentity(
             release_key=f"FY{fiscal_year}",
@@ -192,13 +191,11 @@ def _release(
         session.add(row)
         session.flush()
     metadata = dict(row.metadata_json or {})
-    if request is not None:
-        metadata["download_request"] = request
-    if identity.start_date and identity.end_date:
-        metadata["requested_date_range"] = {
-            "start_date": identity.start_date,
-            "end_date": identity.end_date,
-        }
+    metadata["download_request"] = request
+    metadata["requested_date_range"] = {
+        "start_date": identity.start_date,
+        "end_date": identity.end_date,
+    }
     row.metadata_json = metadata
     row.status = "MATERIALIZING"
     row.reference_period = identity.reference_period
@@ -216,9 +213,9 @@ def materialize_award_archive(
 ) -> dict[str, object]:
     """Materialize prime D1/D2-shaped award data and File F-shaped subawards.
 
-    Prime award summaries and subawards are separate dataset releases. Individual
-    contract/assistance members stay separate Parquet objects so their native
-    schemas are preserved rather than coerced into a lossy union.
+    The exact upstream request is required because the archive itself does not
+    prove its date coverage. Full fiscal years and partial slices therefore get
+    distinct immutable release identities.
     """
     lake = lake or LakeStore()
     identity = award_release_identity(fiscal_year, request)
@@ -250,7 +247,7 @@ def materialize_award_archive(
                 storage_format="ZIP",
                 metadata={
                     "shared_award_archive": True,
-                    "download_request": request or {},
+                    "download_request": request,
                     "native_data_classes": sorted({member.data_class for member in members}),
                 },
             )
