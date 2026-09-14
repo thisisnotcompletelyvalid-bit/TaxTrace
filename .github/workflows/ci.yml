@@ -39,6 +39,48 @@ jobs:
           NEXT_PUBLIC_API_BASE_URL: /api
           TAXTRACE_API_INTERNAL_URL: http://127.0.0.1:8000
 
+  census-live-source-smoke:
+    if: github.ref == 'refs/heads/data-overhaul-v1' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip
+      - run: pip install -e '.[dev]'
+      - name: Parse real Census 2022 government and finance bulk files
+        run: |
+          python - <<'PY'
+          from itertools import islice
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+
+          from taxtrace.warehouse_v2.catalog import get_source
+          from taxtrace.warehouse_v2.census import iter_government_units, inspect_finance_zip
+          from taxtrace.warehouse_v2.download import stream_download
+
+          with TemporaryDirectory() as tmp:
+              root = Path(tmp)
+              unit_source = get_source('census-government-units-2022')
+              unit_path = root / 'govt_units_2022.ZIP'
+              stream_download(unit_source.source_url or '', unit_path, overwrite=True)
+              units = list(islice(iter_government_units(unit_path), 5000))
+              assert len(units) == 5000, len(units)
+              assert all(len(unit.government_id) >= 12 and unit.name for unit in units)
+              assert len({unit.government_id for unit in units}) == len(units)
+
+              finance_source = get_source('census-gov-finance-2022')
+              finance_path = root / '2022_Individual_Unit_File.zip'
+              stream_download(finance_source.source_url or '', finance_path, overwrite=True)
+              stats = inspect_finance_zip(finance_path, max_records=250000)
+              assert stats['records'] == 250000, stats
+              assert stats['governments'] >= 500, stats
+              assert stats['item_codes'] >= 50, stats
+              print({'units_sampled': len(units), **stats})
+          PY
+
   no-docker-e2e:
     runs-on: ubuntu-latest
     env:
