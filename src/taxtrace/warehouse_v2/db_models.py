@@ -18,8 +18,10 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from taxtrace.database import Base
+from taxtrace.db_models import SourceSnapshot
 
 MONEY = Numeric(24, 2)
+SOURCE_SNAPSHOT_TABLE = SourceSnapshot.__tablename__
 
 
 class DatasetDefinition(Base):
@@ -52,7 +54,7 @@ class DatasetRelease(Base):
     reference_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     reference_period: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_snapshot_id: Mapped[int | None] = mapped_column(
-        ForeignKey("source_snapshot.id"), nullable=True, index=True
+        ForeignKey(f"{SOURCE_SNAPSHOT_TABLE}.id"), nullable=True, index=True
     )
     status: Mapped[str] = mapped_column(String(32), default="DISCOVERED", index=True)
     coverage_type: Mapped[str] = mapped_column(String(32), default="UNKNOWN", index=True)
