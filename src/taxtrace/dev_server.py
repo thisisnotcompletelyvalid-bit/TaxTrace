@@ -17,7 +17,6 @@ from taxtrace.finance.fixtures import ingest_all_fixtures
 from taxtrace.finance.reconcile import reconcile_omb_outlays_to_treasury
 from taxtrace.finance.seed import seed_federal_methodology_entities
 from taxtrace.jurisdictional.db_models import JurisdictionSpendFact
-from taxtrace.jurisdictional.fixtures import ingest_jurisdiction_fixtures
 from taxtrace.methodology.invariants import validate_revenue_pool_shares
 from taxtrace.search import rebuild_search_index
 
@@ -101,7 +100,6 @@ def bootstrap_local_database(*, refresh_fixtures: bool = False) -> dict[str, obj
     if refreshed:
         with SessionLocal() as session:
             ingest_all_fixtures(session, root=PROJECT_ROOT / "data" / "fixtures")
-            ingest_jurisdiction_fixtures(session, root=PROJECT_ROOT / "data" / "fixtures")
             rebuild_search_index(session)
 
     after = _warehouse_counts()
