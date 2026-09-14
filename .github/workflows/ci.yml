@@ -36,13 +36,15 @@ jobs:
       - run: npm install
       - run: npm run build
         env:
-          NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+          NEXT_PUBLIC_API_BASE_URL: /api
+          TAXTRACE_API_INTERNAL_URL: http://127.0.0.1:8000
 
   no-docker-e2e:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: sqlite:///./e2e-taxtrace.db
-      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_API_BASE_URL: /api
+      TAXTRACE_API_INTERNAL_URL: http://127.0.0.1:8000
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -78,6 +80,10 @@ jobs:
           base = "http://127.0.0.1:8000"
           health = httpx.get(f"{base}/health")
           health.raise_for_status()
+
+          root = httpx.get(f"{base}/", follow_redirects=False)
+          assert root.status_code in (302, 307), root
+          assert root.headers["location"] == "/docs", root.headers
 
           status = httpx.get(f"{base}/v1/warehouse/status")
           status.raise_for_status()
@@ -163,7 +169,7 @@ jobs:
         run: |
           npm install
           npm run build
-      - name: Start and smoke-test web app
+      - name: Start and smoke-test web app and API proxy
         working-directory: apps/web
         run: |
           npm run start -- -H 127.0.0.1 -p 3000 > /tmp/taxtrace-web.log 2>&1 &
@@ -178,3 +184,22 @@ jobs:
             cat /tmp/taxtrace-web.log
             exit 1
           fi
+          curl -fsS http://127.0.0.1:3000/api/health | grep -q '"status":"ok"'
+          python - <<'PY'
+          import httpx
+
+          request = {
+              "tax_year": 2026,
+              "spending_fiscal_year": 2025,
+              "filing_status": "single",
+              "wage_income": "50000",
+              "spouse_wage_income": "0",
+              "qualifying_children_under_17": 0,
+              "other_dependents": 0,
+          }
+          response = httpx.post("http://127.0.0.1:3000/api/v1/receipt/federal", json=request)
+          response.raise_for_status()
+          body = response.json()
+          assert body["total_allocable_taxes"] == "7645.00", body
+          assert body["conservation_difference"] == "0.00", body
+          PY
