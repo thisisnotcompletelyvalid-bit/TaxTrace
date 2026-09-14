@@ -10,7 +10,7 @@ Warehouse V2 changes the data strategy before TaxTrace expands to more jurisdict
 
 TaxTrace preserves source grain instead of forcing every government into one tree. A dollar can have multiple classifications: function, department, fund, program, object, project, vendor, recipient, award, account, and geography. Those are alternate dimensions, not automatically additive children.
 
-Raw Census item-code rows are therefore stored as native classifications and exposed as non-additive until an official summary-tabulation mapping defines a defensible partition. Federal File A/B/C grains are also kept distinct. File A balances, File B program/object-class detail, and File C award linkages are different views of related federal activity and must not be added together.
+Raw Census item-code rows are therefore stored as native classifications and exposed as non-additive until an official summary-tabulation mapping defines a defensible partition. Federal File A/B/C/D1/D2/F grains are also kept distinct. They are related views of federal activity and must not be added together.
 
 Coverage is also data. Every government/year/grain can report whether TaxTrace has a full census, annual sample, audited statement, native transaction ledger, federal submission, or fallback source.
 
@@ -78,13 +78,16 @@ The native code is preserved even where TaxTrace has not yet attached a friendli
 
 ## Federal backbone
 
-Treasury and OMB remain authoritative controls for federal totals and account structure. Warehouse V2 expands detailed federal ingestion around official USAspending DATA Act account-download grains:
+Treasury and OMB remain authoritative controls for federal totals and account structure. Warehouse V2 expands detailed federal ingestion around official USAspending DATA Act and Custom Award Data Download grains:
 
 - **File A:** Treasury-account balances;
 - **File B:** Treasury account × program activity × object class;
 - **File C:** Treasury account × award financial linkage;
-- **File D1/D2:** prime award and awardee attributes, cataloged but not yet promoted to the same implemented bulk pipeline;
-- **File F:** subawards, cataloged but not yet promoted to the same implemented bulk pipeline.
+- **File D1:** contract prime-award transactions and attributes;
+- **File D2:** assistance prime-award transactions and attributes;
+- **File F:** contract and assistance subawards.
+
+All six source families are now implemented in the Warehouse V2 ingestion framework. They are not six additive piles of spending.
 
 ### Asynchronous download semantics
 
@@ -94,13 +97,54 @@ The client refuses an early download from a nonterminal status. This avoids inte
 
 ### Real A/B/C validation
 
-The manual live validation uses FY2022 budget function 250, General Science, Space, and Technology, because it is a compact slice with account data and real contract/assistance awards. The successful official archive contained:
+The manual A/B/C live validation uses FY2022 budget function 250, General Science, Space, and Technology, because it is a compact slice with account data and real contract/assistance awards. The successful official archive contained:
 
 - **172 File A rows**;
 - **2,557 File B rows**;
 - **828,069 File C rows** across assistance, contracts, and unlinked award files.
 
-TaxTrace classified the real files from their schemas rather than filename assumptions, materialized each grain into separate Parquet objects, and verified each resulting object existed and contained data. File A, B, and C are therefore marked `IMPLEMENTED` in the V2 source catalog. They remain non-additive across submission-file grains.
+TaxTrace classified the real files from their schemas rather than filename assumptions, materialized each grain into separate Parquet objects, and verified each resulting object existed and contained data.
+
+### Real D1/D2/File F validation
+
+The prime/subaward release gate was validated against the real USAspending Custom Award Data Download endpoint on September 14, 2026. The bounded request used all federal agencies, FY2022, and a one-day action-date window of **March 1, 2022**.
+
+The generated ZIP contained four schema families:
+
+- D1 contract prime transactions: **29,507 rows**, **297 columns**;
+- D2 assistance prime transactions: **16,111 rows**, **112 columns**;
+- File F contract subawards: **2,327 rows**, **118 columns**;
+- File F assistance subawards: **4,402 rows**, **113 columns**.
+
+TaxTrace materialized **45,618 D1/D2 rows** and **6,729 File F rows** into four separate Parquet parts. Every required part was nonzero and every generated Parquet object existed.
+
+The live filenames identify the D1/D2 export as `PrimeTransactions`. The source catalog therefore records the D1/D2 grain as `prime_award_transaction`, not one-row-per-award summary data.
+
+### Award identity and cross-grain relationships
+
+The real archive and USAspending's upstream field mappings validate these identity aliases:
+
+```text
+File C: award_unique_key
+D1:     contract_award_unique_key
+D2:     assistance_award_unique_key
+File F: prime_award_unique_key
+```
+
+They correspond to USAspending's canonical generated award identity (`generated_unique_award_id`, derived from the Broker unique award key). This supports the conceptual path:
+
+```text
+File C financial linkage
+→ prime award identity
+→ D1/D2 transaction/recipient attributes
+→ File F subaward/subrecipient detail
+```
+
+But this is an **identity crosswalk, not an additive join**. File C can contain repeated rows for an award identity and D1/D2 are transaction grains with repeated award identities. A raw row-to-row join can therefore become many-to-many and multiply both rows and monetary values. Cross-grain views must first collapse, deduplicate, aggregate, or otherwise constrain each side to the intended award-identity grain.
+
+File F is downstream of a prime award. Its amount must never be added beside the prime award as if it were another federal expenditure. It is a drill-down relationship.
+
+The machine-readable relationship specification lives in `src/taxtrace/warehouse_v2/usaspending_award_crosswalk.py` and marks every C↔D↔F crosswalk non-additive with identity-collapse required.
 
 Large federal downloads belong in the lake. Application tables should materialize the dimensions and aggregates needed for interactive use, not blindly duplicate every federal row into one relational table.
 
@@ -154,7 +198,34 @@ taxtrace data inspect-usaspending-accounts --file /path/to/accounts.zip
 taxtrace data ingest-usaspending-accounts --file /path/to/accounts.zip --fiscal-year 2025
 ```
 
-The generic bulk-request command remains available for official USAspending download payloads that are not yet promoted into specialized materializers.
+Request and materialize D1/D2 prime transactions and File F subawards:
+
+```bash
+taxtrace data bootstrap-federal-awards --fiscal-year 2025
+```
+
+A bounded date slice can be requested explicitly:
+
+```bash
+taxtrace data bootstrap-federal-awards \
+  --fiscal-year 2025 \
+  --start-date 2025-03-01 \
+  --end-date 2025-03-01
+```
+
+Inspect or ingest an existing Custom Award Data Download archive:
+
+```bash
+taxtrace data inspect-usaspending-awards --file /path/to/awards.zip
+taxtrace data ingest-usaspending-awards \
+  --file /path/to/awards.zip \
+  --fiscal-year 2025 \
+  --request-json /path/to/exact-request.json
+```
+
+Manual award ingestion requires the exact request JSON used to generate the source archive. Request provenance is part of the release record, not an optional after-the-fact guess.
+
+The generic `usaspending-submit` command remains available for exact official USAspending payloads. `bulk_awards` maps specifically to `/api/v2/bulk_download/awards/`; the older `awards` kind remains the separate `/api/v2/download/awards/` surface.
 
 ## API
 
@@ -185,18 +256,26 @@ A source is not promoted merely because a parser exists. The intended gates are:
 10. real-source smoke tests;
 11. full-scale import validation for unusually large foundational datasets.
 
-Normal CI continues to run Python tests, lint/compile checks, frontend build, no-Docker application E2E, migrations, and a real Census source smoke. The complete 2022 national import and populated USAspending A/B/C archive validations are manual release workflows.
+Normal CI continues to run Python tests, lint/compile checks, frontend build, no-Docker application E2E, and migrations. Expensive live/full-data workflows remain manual release gates.
 
-## Next ingestion order
+The currently validated manual gates are:
 
-The national registry, 2022 Census finance baseline, 2024 finance-sample framework, and USAspending File A/B/C ingestion are now implemented. The next warehouse work should prioritize:
+- complete 2022 Census government registry + finance import;
+- populated USAspending File A/B/C archive validation;
+- USAspending D1/D2/File F prime/subaward validation with real crosswalk-key checks.
 
-1. prime-award D1/D2 attributes and File F subawards in partitioned lake storage;
-2. Census public employment/payroll and current public pensions;
-3. official Census summary-tabulation formulas and canonical additive state/local expenditure partitions;
-4. state native checkbooks/ledgers, starting with jurisdictions that publish machine-readable bulk data;
-5. large city, county, school-district, and special-district native ledgers;
-6. geographic/jurisdiction resolution for user-selected locations;
-7. crosswalking the richer warehouse back into the personalized tax-allocation engine.
+## Next ingestion/product order
+
+The national registry, 2022 Census finance baseline, 2024 finance-sample framework, USAspending File A/B/C ingestion, and D1/D2/File F award/subaward ingestion are now implemented.
+
+The highest-value next work is no longer another federal source. It is to connect Warehouse V2 to the personalized product:
+
+1. **Federal receipt/explorer V2 bridge** using Warehouse V2 account/program/object and award relationships while preserving one explicit additive partition;
+2. **Federal award/recipient/subaward search** over D1/D2/File F without treating search results as additive;
+3. **Official Census additive taxonomy** for mutually exclusive state/local receipt categories;
+4. **State/local receipt V2 bridge** using the national Census warehouse;
+5. **native-ledger platform adapters** for deeper state/local transaction detail;
+6. Census public employment/payroll and public pensions;
+7. geographic/jurisdiction resolution for user-selected locations.
 
 The governing rule remains breadth first through authoritative standardized data, then depth through native sources, without sacrificing provenance, additive semantics, or conservation.
