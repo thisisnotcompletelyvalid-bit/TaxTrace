@@ -33,13 +33,16 @@ jobs:
               materialize_account_archive,
           )
 
+          # Budget function 250 (General Science, Space, and Technology) is a
+          # compact slice with both account data and real contract/assistance
+          # awards, so this gate exercises populated File A, B, and C data.
           payload = {
               "account_level": "treasury_account",
               "file_format": "csv",
               "filters": {
                   "agency": "all",
                   "fy": "2022",
-                  "budget_function": "900",
+                  "budget_function": "250",
                   "period": "12",
                   "submission_types": [
                       "account_balances",
