@@ -13,24 +13,22 @@ jobs:
         run: |
           python - <<'PY'
           import io
+          import urllib.request
           import zipfile
-          import httpx
 
           url = 'https://www2.census.gov/programs-surveys/gus/datasets/2022/govt_units_2022.ZIP'
-          response = httpx.get(url, follow_redirects=True, timeout=90)
-          response.raise_for_status()
-          print('download_bytes', len(response.content))
-          with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+          request = urllib.request.Request(url, headers={'User-Agent': 'TaxTrace/0.4 live-format diagnostic'})
+          with urllib.request.urlopen(request, timeout=90) as response:
+              content = response.read()
+          print('download_bytes', len(content))
+          with zipfile.ZipFile(io.BytesIO(content)) as archive:
               print('members', [(x.filename, x.file_size) for x in archive.infolist()])
               for member in archive.infolist():
                   if member.is_dir():
                       continue
                   data = archive.read(member)
                   print('MEMBER', member.filename, 'first_1500_bytes=', repr(data[:1500]))
-                  try:
-                      text = data[:6000].decode('utf-8-sig', errors='replace')
-                      print('first_lines', repr(text.splitlines()[:8]))
-                  except Exception as exc:
-                      print('decode_error', exc)
+                  text = data[:6000].decode('utf-8-sig', errors='replace')
+                  print('first_lines', repr(text.splitlines()[:8]))
                   break
           PY
