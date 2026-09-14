@@ -205,7 +205,17 @@ def iter_government_units(zip_path: Path):
                     if frame.empty:
                         continue
                     columns = _dict_columns([str(column) for column in frame.columns])
-                    gid_col = _find_column(columns, "governmentunitcode", "governmentunitid", "governmentcode", "governmentid", "govid", "gid")
+                    gid_col = _find_column(
+                        columns,
+                        "census_id_gidid",
+                        "censusidgidid",
+                        "governmentunitcode",
+                        "governmentunitid",
+                        "governmentcode",
+                        "governmentid",
+                        "govid",
+                        "gid",
+                    )
                     name_col = _find_column(columns, "governmentname", "governmentunitname", "govname", "unitname", "name")
                     if not gid_col or not name_col:
                         continue
