@@ -43,9 +43,26 @@ The GitHub-connected chat re-extracted the Phase 0–3 archive and reran the rep
 
 This connected-chat verification also confirmed that the GitHub repository contains the Phase 0–3 source tree and deterministic binary fixtures; representative Git blob SHAs match the extracted archive exactly.
 
-## Fresh GitHub Actions execution
+## Phase 4–6 release-candidate verification
 
-A fresh CI execution was requested from the connected chat on 2026-09-13 so GitHub would rerun the Python and web jobs against the current `main` branch.
+The Phase 4–6 working tree was rerun from a fresh SQLite database before release on 2026-09-13:
+
+- `pytest -q` -> **33 passed**
+- `python -m compileall -q src apps alembic` -> PASS
+- migrations through `0002_phases_4_6` -> PASS
+- methodology/funding seed and deterministic fixture ingestion -> PASS
+- FY2025 OMB↔Treasury reconciliation -> PASS
+- federal receipt for a 2026 single W-2 filer earning $50,000 -> **$7,645.00 allocated / $0.00 conservation difference**
+- combined Social Security receipt -> **$3,100.00**, `MIXED_FUNDING`, confidence `D`
+- combined Medicare receipt -> **$1,428.59**, `MIXED_FUNDING`, confidence `D`
+- National Defense receipt -> **$644.95**
+- SNAP fixture allocation -> **$0.07**
+- federal-account → program-activity drill-down for account `012-3505` -> PASS, including `Nutrition Assistance`, with exact $0.07 scope conservation
+- receipt-aware `food stamps` search -> resolves SNAP and returns the same **$0.07** attributable amount while remaining explicitly non-additive
+- browser CORS from `http://localhost:3000` -> PASS
+- the five large Phase 4–6 source files were materialized into GitHub only after their Git blob hashes matched the exact locally tested files byte-for-byte.
+
+A fresh GitHub Actions run is triggered by this verification commit and is the release gate before `phase-4-6` is promoted to `main`.
 
 ## Not executable in the generation environment
 
