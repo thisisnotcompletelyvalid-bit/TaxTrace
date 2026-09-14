@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from pathlib import Path
 
@@ -100,6 +101,24 @@ def build_award_bulk_payload(
     return {"filters": filters, "file_format": "csv"}
 
 
+def write_request_sidecar(archive_path: Path, payload: dict) -> Path:
+    """Persist the exact upstream request next to a raw award archive.
+
+    The sidecar is immutable: reusing an archive path with a different request
+    fails rather than silently changing the provenance record.
+    """
+    sidecar = archive_path.with_suffix(archive_path.suffix + ".request.json")
+    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if sidecar.exists():
+        if sidecar.read_text() != rendered:
+            raise RuntimeError(
+                f"USAspending request sidecar already exists with different content: {sidecar}"
+            )
+        return sidecar
+    sidecar.write_text(rendered)
+    return sidecar
+
+
 def request_award_archive(
     fiscal_year: int,
     *,
@@ -139,7 +158,12 @@ def request_award_archive(
         / Path(str(url).split("?", 1)[0]).name
     )
     client.download_completed(response, destination)
-    result["response"] = {**response, "taxtrace_local_path": str(destination)}
+    request_sidecar = write_request_sidecar(destination, payload)
+    result["response"] = {
+        **response,
+        "taxtrace_local_path": str(destination),
+        "taxtrace_request_path": str(request_sidecar),
+    }
     return result
 
 
