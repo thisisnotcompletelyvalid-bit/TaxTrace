@@ -117,6 +117,8 @@ jobs:
       - name: Exercise phases 4-9A API and browser CORS
         run: |
           python - <<'PY'
+          from decimal import Decimal
+
           import httpx
 
           base = "http://127.0.0.1:8000"
@@ -161,10 +163,23 @@ jobs:
           assert body_v2["warehouse"]["status"] in {"NO_READY_RELEASE", "OBJECTS_NOT_LOCAL"}, body_v2
           assert body_v2["accounts"], body_v2
           assert all(
-              sum(float(child["allocated_amount"]) for child in account["children"])
-              == float(account["allocated_amount"])
+              sum(Decimal(child["allocated_amount"]) for child in account["children"])
+              == Decimal(account["allocated_amount"])
               for account in body_v2["accounts"]
           ), body_v2
+
+          awards_v2 = httpx.post(f"{base}/v2/explorer/federal/awards", json=request)
+          awards_v2.raise_for_status()
+          award_body = awards_v2.json()
+          assert award_body["receipt"]["base_receipt"]["total_allocable_taxes"] == "7645.00", award_body
+          assert award_body["file_c"]["status"] in {"NO_READY_RELEASE", "OBJECTS_NOT_LOCAL"}, award_body
+          assert award_body["accounts"], award_body
+          assert all(account["projection_available"] is False for account in award_body["accounts"]), award_body
+          assert all(
+              sum(Decimal(child["allocated_amount"]) for child in account["children"])
+              == Decimal(account["allocated_amount"])
+              for account in award_body["accounts"]
+          ), award_body
 
           local = httpx.post(
               f"{base}/v1/receipt/florida-gainesville",
