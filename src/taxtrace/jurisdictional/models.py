@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from taxtrace.allocation.models import FederalReceiptRequest, FederalReceiptResult, SourceReference
 from taxtrace.enums import CalculationBasis, ConfidenceGrade
+from taxtrace.methodology.version import METHODOLOGY_VERSION
 
 
 class FloridaGainesvilleReceiptRequest(FederalReceiptRequest):
@@ -87,7 +88,7 @@ class SpendingReference(BaseModel):
 
 
 class FloridaGainesvilleReceiptResult(BaseModel):
-    methodology_version: str = "1.2.0"
+    methodology_version: str = METHODOLOGY_VERSION
     federal: FederalReceiptResult
     state_individual_income_tax: Decimal = Decimal("0.00")
     sales_tax_model: ModeledSalesTaxEstimate
