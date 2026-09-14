@@ -4,143 +4,161 @@
 
 The Phase 0–9A repository proved tax calculation, financing-pool attribution, conservation, provenance, and a drill-down/search interface. It did **not** contain enough public-finance data for the intended product. A few federal fixture accounts and a handful of Florida/Gainesville ACFR categories are useful tests, not a serious answer to “where do my taxes go?”
 
-Warehouse V2 changes the data strategy before TaxTrace expands to more jurisdictions.
+Warehouse V2 changes the data strategy before TaxTrace expands to more jurisdictions. It is now the national public-finance foundation for the project.
 
 ## Design doctrine
 
-TaxTrace must preserve the source grain instead of forcing every government into one tree. A dollar can have multiple classifications: function, department, fund, program, object, project, vendor, recipient, award, account, and geography. Those are alternate dimensions, not automatically additive children.
+TaxTrace preserves source grain instead of forcing every government into one tree. A dollar can have multiple classifications: function, department, fund, program, object, project, vendor, recipient, award, account, and geography. Those are alternate dimensions, not automatically additive children.
 
-Raw Census item-code rows are therefore stored as native classifications and exposed as non-additive until the official Census summary-tabulation formulas define a defensible partition. Federal File A/B/C/D/F grains are likewise kept distinct. Native checkbooks retain their own dimensions.
+Raw Census item-code rows are therefore stored as native classifications and exposed as non-additive until an official summary-tabulation mapping defines a defensible partition. Federal File A/B/C grains are also kept distinct. File A balances, File B program/object-class detail, and File C award linkages are different views of related federal activity and must not be added together.
 
-Coverage is also data. Every government/year/grain can report whether TaxTrace has a full census, an annual sample, an audited statement, a native transaction ledger, a federal submission, or only a fallback source.
+Coverage is also data. Every government/year/grain can report whether TaxTrace has a full census, annual sample, audited statement, native transaction ledger, federal submission, or fallback source.
 
 ## Storage architecture
 
 ### Relational hot store
 
-SQLite remains supported for development; PostgreSQL is the production target. Warehouse V2 adds:
+SQLite remains supported for development and validation; PostgreSQL is the production target. Warehouse V2 adds:
 
-- `dataset_definition` — authoritative source catalog;
-- `dataset_release` — immutable source vintages and ingestion status;
-- `government_identifier` — Census and future external-ID crosswalks;
-- `finance_classification` — native/standardized codes without assuming one hierarchy;
-- `government_finance_fact` — standardized state/local finance facts;
-- `detailed_spend_fact` — materialized native/federal detail used frequently by the application;
-- `coverage_record` — completeness/grain/quality for each government and release;
-- `bulk_object` — raw or normalized files stored outside the relational hot path.
+- `dataset_definition` for the authoritative source catalog;
+- `dataset_release` for immutable source vintages and ingestion status;
+- `government_identifier` for Census and future external-ID crosswalks;
+- `finance_classification` for native/standardized codes without assuming one hierarchy;
+- `government_finance_fact` for standardized state/local finance facts;
+- `detailed_spend_fact` for frequently used native/federal detail;
+- `coverage_record` for completeness, grain, and quality by government/release;
+- `bulk_object` for raw or normalized lake objects outside the relational hot path.
 
 ### Raw + columnar lake
 
-`data/raw/` holds immutable downloaded source files. `data/warehouse/lake/` holds normalized high-cardinality data, normally Parquet with Zstandard compression. Both directories are git-ignored. Git stores parsers, source manifests, hashes/metadata, tests, and tiny fixtures, not gigabytes of government data.
+`data/raw/` holds downloaded source files. `data/warehouse/lake/` holds normalized high-cardinality data, normally Parquet with Zstandard compression. Both are git-ignored. Git stores parsers, source manifests, tests, mappings, and tiny fixtures rather than gigabytes of government records.
 
-This is deliberate. Award transactions, subawards, and large municipal checkbooks can grow far beyond what should be committed to Git or eagerly materialized into one application table.
+This split is deliberate. Interactive government-level lookups can use SQL while national scans, historical comparisons, award-scale data, and future analytics can operate on compressed columnar files.
 
 ## Nationwide state/local backbone
 
 ### Government registry
 
-The 2022 Census Government Units/GMAF file provides the national government universe and Census government identifiers. The parser accepts the documented 206-character government-ID record and delimited/workbook fallbacks.
+The 2022 Census Government Units file provides the national government universe and Census government identifiers. The official archive currently contains an XLSX government-unit workbook; TaxTrace also retains parser fallbacks for delimited/fixed-width variants.
+
+The real 2022 archive has been exercised in CI rather than only through synthetic fixtures. The validated full import read **92,114 government-unit records** and produced **92,078 jurisdictions from the registry**.
 
 ### Finance baseline
 
 The first nationwide finance layer is:
 
-1. **2022 Census of Governments Finance Individual Unit File** — full five-year census baseline;
-2. **2024 Annual State & Local Government Finance Individual Unit Files** — fresher annual survey sample overlay.
+1. **2022 Census of Governments Finance Individual Unit File**, the full five-year census baseline;
+2. **2024 Annual State & Local Government Finance Individual Unit Files**, a fresher annual-survey sample overlay.
 
-The individual-unit format supplies a government ID, native three-character finance item code, and amount. Source amounts reported in thousands are normalized to whole dollars while retaining the original code and release metadata.
+The individual-unit format supplies a Census government ID, native finance item code, and amount. Source amounts reported in thousands are normalized to whole dollars while retaining source code, vintage, provenance, and release metadata.
 
-The annual sample is not presented as complete local-government coverage. `coverage_record.completeness` distinguishes `CENSUS` from `SAMPLE`.
+The annual sample is never presented as complete local-government coverage. `coverage_record.completeness` distinguishes `CENSUS` from `SAMPLE`.
+
+### Full 2022 scale validation
+
+A clean GitHub Actions import of the complete official 2022 registry + finance census validated the current architecture at national scale:
+
+- **92,114** government-unit source records;
+- **88,819** governments with 2022 finance facts;
+- **1,337,594** normalized finance facts;
+- **211** distinct finance classifications/item codes;
+- **1,337,594** matching Parquet rows;
+- **88,819** distinct governments in the Parquet mirror;
+- **211** distinct item codes in the Parquet mirror;
+- about **495 MB** for the validation SQLite database;
+- about **4.4 MB** for the compressed normalized Census-finance Parquet file.
+
+The SQL and Parquet row counts are required to agree. The full national validation is intentionally a manual release gate rather than a cost paid on every commit.
 
 ### What the Census layer adds
 
-Instead of eight broad ACFR categories, one government can expose many native lines such as:
+Instead of a few broad ACFR headings, one government can expose native finance lines for areas such as police, fire protection, corrections, judicial/legal activity, highways, health, hospitals, housing/community development, parks/recreation, natural resources, sewerage, solid waste, utilities, transit, taxes, charges, intergovernmental flows, debt, and assets.
 
-- police current operations, construction, land/structures, and equipment;
-- fire protection;
-- correctional institutions and other corrections;
-- judicial/legal activity;
-- highways;
-- health and hospitals;
-- housing/community development;
-- parks/recreation;
-- natural resources;
-- sewerage and solid waste;
-- water/electric/gas/transit utilities;
-- intergovernmental revenue/expenditure;
-- taxes, charges, debt, and assets.
-
-The full native code is preserved even when TaxTrace has not yet loaded a friendly label.
+The native code is preserved even where TaxTrace has not yet attached a friendlier display label.
 
 ## Federal backbone
 
-TaxTrace retains Treasury and OMB for authoritative aggregate/account controls and expands USAspending ingestion around the DATA Act grains:
+Treasury and OMB remain authoritative controls for federal totals and account structure. Warehouse V2 expands detailed federal ingestion around official USAspending DATA Act account-download grains:
 
-- File A — account balances;
-- File B — Treasury account × program activity × object class;
-- File C — account × award financial linkage;
-- File D1/D2 — prime procurement/assistance award attributes;
-- File F — subawards.
+- **File A:** Treasury-account balances;
+- **File B:** Treasury account × program activity × object class;
+- **File C:** Treasury account × award financial linkage;
+- **File D1/D2:** prime award and awardee attributes, cataloged but not yet promoted to the same implemented bulk pipeline;
+- **File F:** subawards, cataloged but not yet promoted to the same implemented bulk pipeline.
 
-`taxtrace-data bootstrap-federal-accounts --fiscal-year 2025` requests all-agency File A/B/C account data from the official USAspending asynchronous download endpoint. `taxtrace-data usaspending-submit` accepts exact official download JSON for larger award/subaward jobs without hiding the upstream schema.
+### Asynchronous download semantics
 
-Large federal downloads belong in the lake. Materialized application tables should contain the dimensions and aggregates needed for interactive use, not blindly duplicate a 100+ GB federal database.
+USAspending returns an eventual `file_url` at submission time, before that object is necessarily downloadable. TaxTrace therefore polls the official status endpoint and does **not** treat `ready` as terminal. Real-source validation observed `ready` before the generated file host was accessible and `finished` once the archive was actually retrievable.
+
+The client refuses an early download from a nonterminal status. This avoids interpreting transient generated-file 403 responses as a permanent network restriction.
+
+### Real A/B/C validation
+
+The manual live validation uses FY2022 budget function 250, General Science, Space, and Technology, because it is a compact slice with account data and real contract/assistance awards. The successful official archive contained:
+
+- **172 File A rows**;
+- **2,557 File B rows**;
+- **828,069 File C rows** across assistance, contracts, and unlinked award files.
+
+TaxTrace classified the real files from their schemas rather than filename assumptions, materialized each grain into separate Parquet objects, and verified each resulting object existed and contained data. File A, B, and C are therefore marked `IMPLEMENTED` in the V2 source catalog. They remain non-additive across submission-file grains.
+
+Large federal downloads belong in the lake. Application tables should materialize the dimensions and aggregates needed for interactive use, not blindly duplicate every federal row into one relational table.
 
 ## Native state and local enrichment
 
-Census provides a comparable national floor; it is not the ceiling. Warehouse V2 includes a generic native-ledger mapper that can retain:
+Census is the comparable national floor, not the ceiling. Warehouse V2 includes a generic native-ledger mapper that can retain department, fund, account, program, activity, object class, project, vendor, recipient, award/contract identifier, description, and native source key.
 
-- department;
-- fund;
-- account;
-- program;
-- activity;
-- object class;
-- project;
-- vendor;
-- recipient;
-- award/contract identifier;
-- description;
-- native source key.
-
-For very large official checkbooks, the default is raw + Parquet storage. Frequently queried slices can be materialized into `detailed_spend_fact`. Jurisdictions with richer portals therefore become more detailed without breaking the national schema.
+For large official checkbooks, the default is raw + Parquet storage. Frequently queried slices can be materialized into `detailed_spend_fact`. Jurisdictions with richer portals can therefore become more detailed without breaking the national schema.
 
 ## Commands
 
-After installation and migration:
+Warehouse V2 is integrated into the normal `taxtrace` CLI under `data`.
 
 ```bash
-taxtrace-data seed
-taxtrace-data stats
+taxtrace data catalog
+taxtrace data seed
+taxtrace data stats
 ```
 
-National Census baseline:
+Download and ingest the Census national baseline, including the 2024 sample overlay:
 
 ```bash
-taxtrace-data bootstrap-national
+taxtrace data bootstrap-national
 ```
 
-2022 census only:
+Use only the complete 2022 census baseline:
 
 ```bash
-taxtrace-data bootstrap-national --no-2024-sample
+taxtrace data bootstrap-national --no-2024-sample
 ```
 
-Inspect a Census finance ZIP without loading it:
+Inspect or ingest already-downloaded Census data:
 
 ```bash
-taxtrace-data inspect-census-finance --file /path/to/2022_Individual_Unit_File.zip
+taxtrace data inspect-census-finance --file /path/to/2022_Individual_Unit_File.zip
+taxtrace data ingest-government-units --file /path/to/govt_units_2022.ZIP
+taxtrace data ingest-census-finance --file /path/to/2022_Individual_Unit_File.zip --year 2022
+taxtrace data materialize-census-finance --file /path/to/2022_Individual_Unit_File.zip --year 2022
 ```
 
-Federal account bulk request:
+Request the official USAspending File A/B/C account archive and normalize it after completion:
 
 ```bash
-taxtrace-data bootstrap-federal-accounts --fiscal-year 2025
+taxtrace data bootstrap-federal-accounts --fiscal-year 2025 --period 12
 ```
+
+Inspect or ingest an existing USAspending account archive:
+
+```bash
+taxtrace data inspect-usaspending-accounts --file /path/to/accounts.zip
+taxtrace data ingest-usaspending-accounts --file /path/to/accounts.zip --fiscal-year 2025
+```
+
+The generic bulk-request command remains available for official USAspending download payloads that are not yet promoted into specialized materializers.
 
 ## API
 
-Warehouse V2 is intentionally separate from the existing tax-receipt API while data coverage is being rebuilt:
+Warehouse V2 is exposed under `/v2/data` while the personalized allocation engine remains under the existing receipt endpoints:
 
 - `GET /v2/data/catalog`
 - `GET /v2/data/stats`
@@ -149,32 +167,36 @@ Warehouse V2 is intentionally separate from the existing tax-receipt API while d
 - `GET /v2/data/governments/{id}/finance`
 - `GET /v2/data/governments/{id}/detail`
 
-The raw Census finance endpoint returns `additive: false` and a warning. This is not cosmetic: the native files contain components and rollups, so the website must not sum them until an explicit additive partition is constructed from official summary-tabulation rules.
+The Census finance endpoint identifies the native result set as non-additive and returns a warning. Native files can contain components and rollups, so the UI must not sum them until a defensible additive partition is explicitly defined.
 
-## Data-quality gates
+## Data-quality and release gates
 
-The overhaul is not complete merely because tables exist. Before a source is promoted into receipt allocation it must pass:
+A source is not promoted merely because a parser exists. The intended gates are:
 
 1. source provenance and release/vintage identification;
 2. native record-count sanity checks;
-3. government-ID and classification-code validation;
-4. amount-unit normalization tests;
+3. identifier and classification validation;
+4. unit normalization tests;
 5. coverage/completeness labeling;
 6. duplicate-key checks;
 7. reconciliation to an authoritative parent total where one exists;
 8. explicit additive/non-additive semantics;
-9. real-source smoke tests in addition to synthetic fixtures.
+9. synthetic regression tests;
+10. real-source smoke tests;
+11. full-scale import validation for unusually large foundational datasets.
+
+Normal CI continues to run Python tests, lint/compile checks, frontend build, no-Docker application E2E, migrations, and a real Census source smoke. The complete 2022 national import and populated USAspending A/B/C archive validations are manual release workflows.
 
 ## Next ingestion order
 
-1. Full 2022 Census government registry and finance census.
-2. 2024 annual finance sample overlay.
-3. Full FY2025 USAspending File A/B/C account data.
-4. Prime awards and subawards into partitioned lake storage.
-5. 2022 Census public employment/payroll and current public pensions.
-6. State native checkbooks/ledgers, beginning with states that publish machine-readable bulk data.
-7. Large-city/county/school/special-district native ledgers.
-8. Official Census summary-tabulation formulas to create defensible additive state/local expenditure partitions.
-9. Crosswalk the richer warehouse back into the personalized tax-allocation engine.
+The national registry, 2022 Census finance baseline, 2024 finance-sample framework, and USAspending File A/B/C ingestion are now implemented. The next warehouse work should prioritize:
 
-The guiding rule is breadth first through standardized authoritative sources, then depth through native sources, without sacrificing auditability or conservation.
+1. prime-award D1/D2 attributes and File F subawards in partitioned lake storage;
+2. Census public employment/payroll and current public pensions;
+3. official Census summary-tabulation formulas and canonical additive state/local expenditure partitions;
+4. state native checkbooks/ledgers, starting with jurisdictions that publish machine-readable bulk data;
+5. large city, county, school-district, and special-district native ledgers;
+6. geographic/jurisdiction resolution for user-selected locations;
+7. crosswalking the richer warehouse back into the personalized tax-allocation engine.
+
+The governing rule remains breadth first through authoritative standardized data, then depth through native sources, without sacrificing provenance, additive semantics, or conservation.
