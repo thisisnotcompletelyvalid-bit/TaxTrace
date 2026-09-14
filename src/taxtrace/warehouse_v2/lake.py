@@ -19,6 +19,16 @@ class LakeObjectInfo:
     byte_count: int
 
 
+def _duckdb_sql_literal(value: str | Path) -> str:
+    """Quote a filesystem path/value for DuckDB SQL.
+
+    DuckDB parameter binding works for table-function inputs in many contexts, but COPY TO does
+    not accept a parameter placeholder for the destination path. Keeping quoting in one helper
+    avoids ad-hoc f-string escaping throughout the lake code.
+    """
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 class LakeStore:
     """Filesystem/object-store-shaped lake for raw and high-cardinality normalized data."""
 
@@ -83,20 +93,35 @@ class LakeStore:
         session.commit()
         return row
 
-    def csv_to_parquet(self, source: Path, destination: Path) -> int:
-        """Normalize a huge CSV to compressed Parquet with DuckDB streaming through disk."""
+    def csv_to_parquet(
+        self,
+        source: Path,
+        destination: Path,
+        *,
+        delimiter: str = ",",
+    ) -> int:
+        """Normalize a huge delimited file to compressed Parquet with DuckDB streaming through disk."""
         try:
             import duckdb
         except ImportError as exc:  # pragma: no cover - dependency error is operational
             raise RuntimeError("duckdb is required for CSV-to-Parquet lake materialization") from exc
+        if len(delimiter) != 1:
+            raise ValueError("delimiter must be exactly one character")
         destination.parent.mkdir(parents=True, exist_ok=True)
+        source_sql = _duckdb_sql_literal(source)
+        destination_sql = _duckdb_sql_literal(destination)
+        delimiter_sql = _duckdb_sql_literal(delimiter)
         connection = duckdb.connect()
         try:
             connection.execute(
-                "COPY (SELECT * FROM read_csv_auto(?, header=true, all_varchar=true, "
-                "sample_size=-1)) TO ? (FORMAT PARQUET, COMPRESSION ZSTD)",
-                [str(source), str(destination)],
+                "COPY (SELECT * FROM read_csv_auto("
+                f"{source_sql}, header=true, delim={delimiter_sql}, all_varchar=true, sample_size=-1"
+                f")) TO {destination_sql} (FORMAT PARQUET, COMPRESSION ZSTD)"
             )
-            return int(connection.execute("SELECT count(*) FROM read_parquet(?)", [str(destination)]).fetchone()[0])
+            return int(
+                connection.execute(
+                    f"SELECT count(*) FROM read_parquet({destination_sql})"
+                ).fetchone()[0]
+            )
         finally:
             connection.close()
