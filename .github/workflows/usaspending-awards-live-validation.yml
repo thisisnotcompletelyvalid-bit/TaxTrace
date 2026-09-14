@@ -6,7 +6,7 @@ on:
 jobs:
   validate-live-awards:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       DATABASE_URL: sqlite:///./usaspending-awards-live.db
     steps:
@@ -34,13 +34,13 @@ jobs:
               request_award_archive,
           )
 
-          # A short all-government window keeps the live gate bounded while
-          # still requiring real procurement, assistance, and subaward data.
+          # One federal-wide action-date day keeps the gate bounded while still
+          # requiring real procurement, assistance, and both subaward families.
           result = request_award_archive(
               2022,
               agency="all",
               start_date=date(2022, 3, 1),
-              end_date=date(2022, 3, 7),
+              end_date=date(2022, 3, 1),
               wait=True,
           )
           local_path = Path(result["response"]["taxtrace_local_path"])
