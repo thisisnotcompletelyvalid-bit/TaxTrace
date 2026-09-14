@@ -446,9 +446,23 @@ def ingest_finance_zip(
     session.execute(delete(CoverageRecord).where(CoverageRecord.dataset_release_id == release.id))
     session.commit()
 
-    identifiers = dict(session.execute(select(GovernmentIdentifier.value, GovernmentIdentifier.jurisdiction_id).where(GovernmentIdentifier.scheme == "CENSUS_GOV_ID")))
+    identifiers = {
+        value: jurisdiction_id
+        for value, jurisdiction_id in session.execute(
+            select(GovernmentIdentifier.value, GovernmentIdentifier.jurisdiction_id).where(
+                GovernmentIdentifier.scheme == "CENSUS_GOV_ID"
+            )
+        )
+    }
     states = _states(session)
-    classes = dict(session.execute(select(FinanceClassification.code, FinanceClassification.id).where(FinanceClassification.scheme == "CENSUS_GOV_FINANCE")))
+    classes = {
+        code: classification_id
+        for code, classification_id in session.execute(
+            select(FinanceClassification.code, FinanceClassification.id).where(
+                FinanceClassification.scheme == "CENSUS_GOV_FINANCE"
+            )
+        )
+    }
     pending: list[dict] = []
     count = 0
 
