@@ -29,9 +29,9 @@ class USAspendingAwardArchiveMember:
 def classify_award_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, str]:
     """Classify a Custom Award Data Download member by its actual schema.
 
-    Returns `(data_class, award_family)`, where data_class is D1, D2, or F.
-    File F contract and assistance subaward members intentionally share one data
-    class because they are the same subaward grain even when their attributes differ.
+    Returns ``(data_class, award_family)``, where ``data_class`` is D1, D2,
+    or F. File F contracts and assistance are one subaward grain, but the
+    family is retained because their native schemas differ.
     """
     normalized = {str(column).strip().lower() for column in columns}
 
@@ -44,8 +44,16 @@ def classify_award_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, s
         "sub_awardee_or_recipient_legal",
     }
     if normalized & subaward_markers:
-        family = "contract" if "award_id_piid" in normalized or "prime_award_id" in normalized else "assistance"
-        return "F", family
+        # USAspending File F contract exports identify the parent prime award
+        # with prime_award_piid; assistance exports use prime_award_fain/URI.
+        if "prime_award_piid" in normalized:
+            return "F", "contract"
+        if "prime_award_fain" in normalized or "prime_award_uri" in normalized:
+            return "F", "assistance"
+        raise ValueError(
+            "USAspending File F-shaped columns do not identify contract vs assistance: "
+            + ", ".join(sorted(normalized)[:30])
+        )
 
     if "contract_award_unique_key" in normalized or "award_id_piid" in normalized:
         return "D1", "contract"
