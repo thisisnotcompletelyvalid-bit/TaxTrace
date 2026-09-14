@@ -1,7 +1,7 @@
-# TaxTrace product scope — phases 0–9A
+# TaxTrace product scope — phases 0–9A + Federal Product V2
 
-Version: 0.3.0
-Methodology version: 1.2.0
+Version: 0.6.0
+Methodology version: 1.3.0
 
 ## Purpose
 
@@ -18,7 +18,9 @@ Implemented scope:
 - Phase 6: indexed search;
 - Phase 7: Florida state sales-tax attribution to audited state governmental-activity expenditures;
 - Phase 8: Alachua/Gainesville dedicated surtax routing plus Gainesville actual-spending reference;
-- Phase 9A: quick-mode statistical sales-tax estimation using BLS Consumer Expenditure data and a transparent Florida taxability matrix.
+- Phase 9A: quick-mode statistical sales-tax estimation using BLS Consumer Expenditure data and a transparent Florida taxability matrix;
+- Warehouse V2: national Census state/local backbone plus USAspending File A/B/C/D1/D2/F lake ingestion and coverage metadata;
+- Federal Product V2: OMB-controlled personalized federal accounts with File B program/object detail, conservative File C award projection, D1/D2 prime-recipient enrichment, and non-additive File F subaward drilldown.
 
 ## Tax concept
 
@@ -67,18 +69,39 @@ For the local-government/WSPP distribution layer, the model uses the official po
 
 Gainesville FY2025 audited governmental-activity expenditures are loaded as an ACTUAL reference view. They are deliberately **not** added to the user's tax receipt because quick-mode wages do not establish a personal property-tax, utility-tax, fee, or other city-revenue liability.
 
-## Receipt and explorer scope
+## Federal Product V2 receipt and explorer scope
 
-The federal receipt continues to use calculated supported personal liabilities, effective tax-to-pool mappings, actual OMB account outlays, explicit financing-pool eligibility rules, and exact cent conservation.
+The federal receipt uses calculated supported personal liabilities, effective tax-to-pool mappings, actual OMB account outlays, explicit financing-pool eligibility rules, and exact cent conservation.
 
-Federal additive explorer views include purpose, agency, account, program activity, object class, and awards. Cross-view addition is prohibited because the same underlying spending can be classified simultaneously in more than one way.
+OMB remains the controlling additive account attribution. Warehouse V2 then exposes deeper alternate views without replacing or adding to that parent:
+
+- File B can partition an OMB-controlled account into program activity × object class using a proven full-year File B denominator;
+- File C can receive personalized award-financial attribution only for the fraction of the account defensibly represented by full-year File C outlays relative to that File B denominator;
+- repeated File C rows are collapsed to canonical award identity before personalized shares are assigned;
+- unlinked File C rows remain explicit rather than being dropped;
+- D1/D2 can enrich a collapsed prime-award identity with recipient and transaction context but create no additional personalized dollars;
+- File F subawards are downstream, non-additive detail and create no additional personalized dollars.
+
+If File C cannot be bounded conservatively by the File B account denominator, the product refuses award allocation and leaves the parent amount residual for that view.
+
+Cross-view addition is prohibited because purpose, agency, account, File B, File C, D1/D2, and File F can describe the same underlying spending simultaneously.
+
+The root federal page uses `/v2/receipt/federal` as its primary calculation API. The mature V1 purpose/agency explorer remains available over the nested conserved base receipt while Warehouse V2 account and award views complete their staged migration.
+
+## State/local receipt scope
 
 The Florida and Alachua receipt layers each enforce independent cent-level conservation. Gainesville's spending reference is non-additive to the quick-mode personalized receipt.
 
+The national Census Warehouse V2 backbone is implemented, but a nationwide state/local personalized receipt is not yet represented as complete. The next major state/local product work is an official additive Census taxonomy followed by jurisdiction resolution and a national receipt bridge.
+
 ## Search scope
 
-The federal portable SQLite/PostgreSQL-compatible search index covers agencies, federal/Treasury accounts, program activities, object classes, budget functions/subfunctions, awards, recipients, canonical categories, agency abbreviations, automatic aliases, and curated synonyms. Search results can overlap and are never presented as an additive receipt.
+The current federal portable SQLite/PostgreSQL-compatible search index covers agencies, federal/Treasury accounts, program activities, object classes, budget functions/subfunctions, awards, recipients, canonical categories, agency abbreviations, automatic aliases, and curated synonyms. Search results can overlap and are never presented as an additive receipt.
+
+Federal search remains on the V1 index in 0.6.0. The planned 0.6.5 search migration will index Warehouse V2 D1/D2/File F award, recipient, subaward, and subrecipient entities while preserving non-additive search semantics.
 
 ## Privacy posture
 
 No account, SSN, name, tax document, or street address is required. Tax inputs are sent in POST bodies. The Gainesville quick mode requires no address. Production deployments should prevent request-body logging of income/household inputs.
+
+Future nationwide jurisdiction resolution should prefer the least precise location sufficient for the requested tax/jurisdiction calculation and should not require a street address unless a tax rule actually depends on one.
