@@ -62,7 +62,9 @@ The Phase 4–6 working tree was rerun from a fresh SQLite database before relea
 - browser CORS from `http://localhost:3000` -> PASS
 - the five large Phase 4–6 source files were materialized into GitHub only after their Git blob hashes matched the exact locally tested files byte-for-byte.
 
-A fresh GitHub Actions run is triggered by this verification commit and is the release gate before `phase-4-6` is promoted to `main`.
+The first GitHub release-candidate run passed the entire backend/API E2E gate but caught a frontend TypeScript omission: `ExplorerNode` did not declare the source metadata already returned by the API. The field was added without weakening type checking, and the corrected `apps/web/app/page.tsx` Git blob now matches the locally fixed SHA `3801897e3096a1f7f7f81a882a28f243d053ee77`.
+
+This commit triggers the final full GitHub Actions release gate before `phase-4-6` is promoted to `main`.
 
 ## Not executable in the generation environment
 
