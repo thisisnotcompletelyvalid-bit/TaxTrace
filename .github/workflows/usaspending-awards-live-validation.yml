@@ -1,0 +1,80 @@
+name: USAspending Prime/Subaward Live Validation
+
+on:
+  push:
+    branches: [data-awards-v2]
+  workflow_dispatch:
+
+jobs:
+  validate-live-awards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: sqlite:///./usaspending-awards-live.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - run: alembic upgrade head
+      - name: Request, download, and materialize live D1/D2/File F data
+        run: |
+          python - <<'PY'
+          from datetime import date
+          from pathlib import Path
+
+          from taxtrace.database import SessionLocal
+          from taxtrace.warehouse_v2.usaspending_award_lake import (
+              PRIME_DATASET,
+              SUBAWARD_DATASET,
+              inspect_award_archive,
+          )
+          from taxtrace.warehouse_v2.usaspending_awards import (
+              materialize_requested_awards,
+              request_award_archive,
+          )
+
+          # A short all-government window keeps the live gate bounded while
+          # still requiring real procurement, assistance, and subaward data.
+          result = request_award_archive(
+              2022,
+              agency="all",
+              start_date=date(2022, 3, 1),
+              end_date=date(2022, 3, 7),
+              wait=True,
+          )
+          local_path = Path(result["response"]["taxtrace_local_path"])
+          members = inspect_award_archive(local_path)
+          member_grains = {(m.data_class, m.award_family) for m in members}
+          print("members", [(m.member_name, m.data_class, m.award_family, len(m.columns)) for m in members])
+          assert ("D1", "contract") in member_grains, member_grains
+          assert ("D2", "assistance") in member_grains, member_grains
+          assert ("F", "contract") in member_grains, member_grains
+          assert ("F", "assistance") in member_grains, member_grains
+
+          with SessionLocal() as session:
+              warehouse = materialize_requested_awards(session, result, fiscal_year=2022)
+
+          print("warehouse", warehouse)
+          datasets = warehouse["datasets"]
+          assert set(datasets) == {PRIME_DATASET, SUBAWARD_DATASET}, datasets.keys()
+
+          expected = {
+              PRIME_DATASET: {("D1", "contract"), ("D2", "assistance")},
+              SUBAWARD_DATASET: {("F", "contract"), ("F", "assistance")},
+          }
+          for dataset_key, required_grains in expected.items():
+              parts = datasets[dataset_key]["parts"]
+              positive_grains = {
+                  (part["data_class"], part["award_family"])
+                  for part in parts
+                  if part["rows"] > 0
+              }
+              assert required_grains <= positive_grains, (dataset_key, parts)
+              assert datasets[dataset_key]["rows"] > 0
+              for object_key in datasets[dataset_key]["parquet_objects"]:
+                  parquet = Path("data/warehouse/lake") / object_key
+                  assert parquet.exists() and parquet.stat().st_size > 0, parquet
+          PY
