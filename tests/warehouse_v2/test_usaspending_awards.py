@@ -1,4 +1,6 @@
+import json
 from datetime import date
+from pathlib import Path
 
 import pytest
 
@@ -7,6 +9,7 @@ from taxtrace.warehouse_v2.usaspending_awards import (
     SUBAWARD_TYPES,
     build_award_bulk_payload,
     fiscal_year_date_range,
+    write_request_sidecar,
 )
 
 
@@ -73,3 +76,26 @@ def test_payload_rejects_invalid_windows() -> None:
             start_date=date(2025, 2, 1),
             end_date=date(2025, 1, 1),
         )
+
+
+def test_request_sidecar_is_immutable(tmp_path: Path) -> None:
+    archive = tmp_path / "awards.zip"
+    archive.write_bytes(b"archive")
+    payload = build_award_bulk_payload(
+        2022,
+        start_date=date(2022, 3, 1),
+        end_date=date(2022, 3, 1),
+    )
+
+    sidecar = write_request_sidecar(archive, payload)
+    assert sidecar.name == "awards.zip.request.json"
+    assert json.loads(sidecar.read_text()) == payload
+    assert write_request_sidecar(archive, payload) == sidecar
+
+    changed = build_award_bulk_payload(
+        2022,
+        start_date=date(2022, 3, 2),
+        end_date=date(2022, 3, 2),
+    )
+    with pytest.raises(RuntimeError, match="different content"):
+        write_request_sidecar(archive, changed)
