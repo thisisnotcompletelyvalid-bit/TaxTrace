@@ -1,0 +1,40 @@
+name: Materialize Phase 4-6 sources
+
+on:
+  push:
+    branches: [phase-4-6]
+    paths:
+      - '.sync/**'
+      - '.github/workflows/materialize-phase46.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: phase-4-6
+          fetch-depth: 0
+      - name: Reconstruct exact tested sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .sync/phase46.tar.gz.b64.* > /tmp/phase46.tar.gz.b64
+          base64 -d /tmp/phase46.tar.gz.b64 > /tmp/phase46.tar.gz
+          tar -xzf /tmp/phase46.tar.gz
+
+          test "$(git hash-object src/taxtrace/allocation/engine.py)" = "95ee094af22e2ddaf7854547972e5463f5036107"
+          test "$(git hash-object src/taxtrace/explorer.py)" = "3bcfcb50aaf69662086ce613364141393c7e6595"
+          test "$(git hash-object src/taxtrace/search.py)" = "0a6b49e6816fe03f75c2d4dbe2bfbbbe1589012d"
+          test "$(git hash-object src/taxtrace/finance/sources/omb.py)" = "bb791d42df1cb056739354798a8b81c38dbaebbb"
+          test "$(git hash-object src/taxtrace/finance/sources/usaspending.py)" = "5dfde03e53933589ee2fb9b5f6a50e51e883c2f0"
+
+          rm -rf .sync .github/workflows/materialize-phase46.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Complete TaxTrace phases 4-6 sources"
+          git push origin HEAD:phase-4-6
