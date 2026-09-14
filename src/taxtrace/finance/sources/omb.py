@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from taxtrace.db_models import (
     Agency,
+    BudgetFunction,
     BudgetSubfunction,
     FederalAccount,
     OMBAccountRecord,
@@ -16,6 +17,7 @@ from taxtrace.db_models import (
     SpendFact,
 )
 from taxtrace.enums import DataStatus, FinancialMetric, SourceKind
+from taxtrace.finance.budget_functions import function_for_subfunction
 from taxtrace.finance.snapshot import SnapshotStore
 from taxtrace.finance.sources.base import HttpFetcher, filename_from_url
 
@@ -322,6 +324,22 @@ def _get_or_create_account(session: Session, agency_id: int, code: str, name: st
 def _get_or_create_subfunction(session: Session, code: str | None, title: str | None) -> BudgetSubfunction | None:
     if not code and not title:
         return None
+    info = function_for_subfunction(code, title)
+    function = session.scalar(
+        select(BudgetFunction).where(
+            BudgetFunction.source_kind == SourceKind.OMB,
+            BudgetFunction.native_code == info.code,
+        )
+    )
+    if function is None:
+        function = BudgetFunction(
+            source_kind=SourceKind.OMB, native_code=info.code, name=info.name
+        )
+        session.add(function)
+        session.flush()
+    elif function.name != info.name:
+        function.name = info.name
+
     obj = session.scalar(
         select(BudgetSubfunction).where(
             BudgetSubfunction.source_kind == SourceKind.OMB,
@@ -331,8 +349,13 @@ def _get_or_create_subfunction(session: Session, code: str | None, title: str | 
     )
     if obj is None:
         obj = BudgetSubfunction(
-            source_kind=SourceKind.OMB, native_code=code, name=title or code or "Unknown"
+            source_kind=SourceKind.OMB,
+            function_id=function.id,
+            native_code=code,
+            name=title or code or "Unknown",
         )
         session.add(obj)
         session.flush()
+    else:
+        obj.function_id = function.id
     return obj
