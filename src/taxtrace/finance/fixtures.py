@@ -19,6 +19,7 @@ from taxtrace.finance.sources.omb import (
     _get_or_create_subfunction,
 )
 from taxtrace.finance.sources.usaspending import USASpendingSource
+from taxtrace.jurisdictional.fixtures import ingest_jurisdiction_fixtures
 
 
 class FixtureFetcher:
@@ -36,15 +37,13 @@ class FixtureFetcher:
             idx = parts.index("treasury_account")
             tas = parts[idx + 1]
             return self.bundle[f"tas:{tas}:program_activity"]
-        # .../api/v2/agency/{code}/{dimension}/
         try:
             agency_idx = parts.index("agency")
             code = parts[agency_idx + 1]
             dimension = parts[agency_idx + 2]
         except (ValueError, IndexError) as exc:
             raise KeyError(f"No fixture for URL {url}") from exc
-        key = f"{code}:{dimension}"
-        return self.bundle[key]
+        return self.bundle[f"{code}:{dimension}"]
 
     def post_json(self, url: str, json_body: dict) -> dict:
         path = urlparse(url).path
@@ -225,4 +224,5 @@ def ingest_all_fixtures(session: Session, root: Path | None = None) -> dict[str,
         "usaspending": ingest_usaspending_fixture(
             session, fixture_root / "usaspending" / "usda_fy2025.json", fiscal_year=2025
         ),
+        "jurisdiction": ingest_jurisdiction_fixtures(session, root=fixture_root),
     }
