@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from taxtrace.allocation.engine import FederalAllocationEngine, _reconcile_parts, money
 from taxtrace.allocation.models import FederalReceiptRequest, FederalReceiptResult
 from taxtrace.db_models import FederalAccount
-from taxtrace.tax.models import FederalTaxInput
 from taxtrace.warehouse_v2.db_models import BulkObject, DatasetDefinition, DatasetRelease
 from taxtrace.warehouse_v2.lake import LakeStore
 
@@ -62,12 +61,7 @@ class WarehouseAccountNode(BaseModel):
 
 
 class FederalReceiptV2Result(BaseModel):
-    """Conserved federal receipt with Warehouse V2 File B as an additive detail partition.
-
-    OMB actual account outlays remain the controlling attribution base. File B is used only to
-    partition an already-attributed account amount across program-activity × object-class rows.
-    This deliberately avoids treating OMB and USAspending as two additive piles of spending.
-    """
+    """Conserved federal receipt with Warehouse V2 File B as an additive detail partition."""
 
     base_receipt: FederalReceiptResult
     warehouse: WarehouseCoverage
@@ -89,6 +83,13 @@ class _FileBRow(BaseModel):
 
 
 class FederalReceiptV2Engine:
+    """Bridge the conserved OMB receipt into Warehouse V2 File B detail.
+
+    OMB actual account outlays remain the controlling attribution base. File B is used only to
+    partition an already-attributed account amount across program-activity × object-class rows.
+    OMB and USAspending values are therefore never added together.
+    """
+
     def __init__(
         self,
         allocation_engine: FederalAllocationEngine | None = None,
@@ -140,9 +141,7 @@ class FederalReceiptV2Engine:
             detail = file_b_by_account.get(code, [])
             children = self._children(code, allocated_amount, detail)
             child_total = money(sum((child.allocated_amount for child in children), ZERO))
-            file_b_outlay = (
-                money(sum((row.outlay for row in detail), ZERO)) if detail else None
-            )
+            file_b_outlay = money(sum((row.outlay for row in detail), ZERO)) if detail else None
             notes: list[str] = []
             if detail:
                 notes.append(
