@@ -1,8 +1,6 @@
 name: USAspending Prime/Subaward Live Validation
 
 on:
-  push:
-    branches: [data-awards-v2]
   workflow_dispatch:
 
 jobs:
