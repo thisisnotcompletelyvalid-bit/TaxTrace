@@ -1,0 +1,108 @@
+name: Warehouse Full Import Validation
+
+on:
+  push:
+    branches: [data-overhaul-v1]
+
+jobs:
+  full-2022-census:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: sqlite:///./national-validation.db
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - run: alembic upgrade head
+      - name: Import complete 2022 government registry and finance census
+        run: |
+          /usr/bin/time -v python -m taxtrace.warehouse_v2.cli bootstrap-national --no-2024-sample
+      - name: Validate national warehouse volume and Parquet mirror
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          import duckdb
+          from sqlalchemy import func, select
+
+          from taxtrace.database import SessionLocal
+          from taxtrace.db_models import Jurisdiction
+          from taxtrace.warehouse_v2.db_models import (
+              BulkObject,
+              CoverageRecord,
+              DatasetDefinition,
+              DatasetRelease,
+              FinanceClassification,
+              GovernmentFinanceFact,
+              GovernmentIdentifier,
+          )
+
+          with SessionLocal() as session:
+              identifiers = session.scalar(select(func.count(GovernmentIdentifier.id))) or 0
+              governments = session.scalar(select(func.count(Jurisdiction.id))) or 0
+              facts = session.scalar(select(func.count(GovernmentFinanceFact.id))) or 0
+              coverage = session.scalar(select(func.count(CoverageRecord.id))) or 0
+              classifications = session.scalar(select(func.count(FinanceClassification.id))) or 0
+              release = session.scalar(
+                  select(DatasetRelease)
+                  .join(DatasetDefinition, DatasetRelease.dataset_id == DatasetDefinition.id)
+                  .where(DatasetDefinition.key == 'census-gov-finance-2022')
+              )
+              parquet = session.scalar(
+                  select(BulkObject)
+                  .where(
+                      BulkObject.dataset_release_id == release.id,
+                      BulkObject.storage_format == 'PARQUET',
+                  )
+              )
+              print({
+                  'government_identifiers': identifiers,
+                  'jurisdictions': governments,
+                  'finance_facts': facts,
+                  'coverage_records': coverage,
+                  'classifications': classifications,
+                  'release_governments': release.government_count,
+                  'release_rows': release.row_count,
+                  'raw_bytes': release.raw_bytes,
+                  'normalized_bytes': release.normalized_bytes,
+                  'parquet_object': parquet.object_key if parquet else None,
+              })
+              assert identifiers >= 85000, identifiers
+              assert governments >= 85000, governments
+              assert facts >= 1000000, facts
+              assert coverage >= 50000, coverage
+              assert classifications >= 150, classifications
+              assert release.status == 'READY', release.status
+              assert release.row_count == facts, (release.row_count, facts)
+              assert parquet is not None
+              assert parquet.row_count == facts, (parquet.row_count, facts)
+              parquet_path = Path('data/warehouse/lake') / parquet.object_key
+
+          connection = duckdb.connect()
+          try:
+              parquet_rows = connection.execute(
+                  'SELECT count(*) FROM read_parquet(?)', [str(parquet_path)]
+              ).fetchone()[0]
+              distinct_governments = connection.execute(
+                  'SELECT count(DISTINCT government_id) FROM read_parquet(?)', [str(parquet_path)]
+              ).fetchone()[0]
+              distinct_codes = connection.execute(
+                  'SELECT count(DISTINCT item_code) FROM read_parquet(?)', [str(parquet_path)]
+              ).fetchone()[0]
+          finally:
+              connection.close()
+          print({
+              'parquet_rows': parquet_rows,
+              'parquet_governments': distinct_governments,
+              'parquet_item_codes': distinct_codes,
+              'sqlite_bytes': Path('national-validation.db').stat().st_size,
+              'parquet_bytes': parquet_path.stat().st_size,
+          })
+          assert parquet_rows == facts
+          assert distinct_governments >= 50000
+          assert distinct_codes >= 150
+          PY
