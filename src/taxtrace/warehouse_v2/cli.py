@@ -292,11 +292,14 @@ def inspect_usaspending_awards(
 def ingest_usaspending_awards(
     file: Path = typer.Option(..., "--file", exists=True),
     fiscal_year: int = typer.Option(..., "--fiscal-year"),
-    request_json: Path | None = typer.Option(
-        None, "--request-json", exists=True, help="Optional exact USAspending request JSON"
+    request_json: Path = typer.Option(
+        ...,
+        "--request-json",
+        exists=True,
+        help="Exact USAspending request JSON used to generate this archive",
     ),
 ) -> None:
-    request = json.loads(request_json.read_text()) if request_json else None
+    request = json.loads(request_json.read_text())
     with SessionLocal() as session:
         seed_catalog(session)
         result = materialize_award_archive(
