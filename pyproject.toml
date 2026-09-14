@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "taxtrace"
-version = "0.3.0"
-description = "Auditable federal, Florida, and local tax-attribution and public-finance explorer."
+version = "0.4.0"
+description = "Auditable tax attribution and national multi-jurisdiction public-finance warehouse."
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 dependencies = [
   "alembic>=1.13",
+  "duckdb>=1.4",
   "fastapi>=0.115",
   "httpx>=0.27",
   "openpyxl>=3.1",
@@ -33,6 +34,7 @@ dev = [
 [project.scripts]
 taxtrace = "taxtrace.cli:app"
 taxtrace-api = "taxtrace.dev_server:main"
+taxtrace-data = "taxtrace.warehouse_v2.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

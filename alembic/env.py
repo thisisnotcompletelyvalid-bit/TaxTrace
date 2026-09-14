@@ -6,6 +6,8 @@ from sqlalchemy import engine_from_config, pool
 from taxtrace.config import get_settings
 from taxtrace.database import Base
 from taxtrace import db_models  # noqa: F401
+from taxtrace.jurisdictional import db_models as jurisdictional_db_models  # noqa: F401
+from taxtrace.warehouse_v2 import db_models as warehouse_v2_db_models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
