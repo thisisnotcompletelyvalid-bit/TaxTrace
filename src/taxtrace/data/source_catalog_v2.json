@@ -114,7 +114,7 @@
       "source_url": "https://api.usaspending.gov/api/v2/download/accounts/",
       "documentation_url": "https://www.usaspending.gov/data-sources",
       "bulk_available": true,
-      "ingestion_status": "BULK_FRAMEWORK",
+      "ingestion_status": "IMPLEMENTED",
       "priority": 15,
       "metadata": {"submission_file": "A"}
     },
@@ -127,7 +127,7 @@
       "source_url": "https://api.usaspending.gov/api/v2/download/accounts/",
       "documentation_url": "https://www.usaspending.gov/data-sources",
       "bulk_available": true,
-      "ingestion_status": "BULK_FRAMEWORK",
+      "ingestion_status": "IMPLEMENTED",
       "priority": 15,
       "metadata": {"submission_file": "B"}
     },
@@ -140,7 +140,7 @@
       "source_url": "https://api.usaspending.gov/api/v2/download/accounts/",
       "documentation_url": "https://www.usaspending.gov/data-sources",
       "bulk_available": true,
-      "ingestion_status": "BULK_FRAMEWORK",
+      "ingestion_status": "IMPLEMENTED",
       "priority": 15,
       "metadata": {"submission_file": "C"}
     },
