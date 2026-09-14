@@ -32,6 +32,11 @@ def test_award_crosswalks_use_one_canonical_non_additive_key() -> None:
     }
     assert all(spec.canonical_key == CANONICAL_AWARD_KEY for spec in specs)
     assert all(spec.additive is False for spec in specs)
+    assert all(spec.requires_identity_collapse is True for spec in specs)
+    assert {spec.cardinality for spec in specs} == {
+        "many_file_c_rows_to_many_prime_transactions_via_award_identity",
+        "many_prime_transactions_to_many_subawards_via_award_identity",
+    }
 
     contract = award_crosswalks(award_family="contract")
     assistance = award_crosswalks(award_family="assistance")
