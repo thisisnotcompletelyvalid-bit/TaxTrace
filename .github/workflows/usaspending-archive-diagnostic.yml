@@ -1,0 +1,59 @@
+name: USAspending Archive Diagnostic
+
+on:
+  push:
+    branches: [data-overhaul-v1]
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - name: Generate and inspect a real USAspending A/B/C account archive
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tempfile import TemporaryDirectory
+          from zipfile import ZipFile
+
+          from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
+
+          payload = {
+              "account_level": "treasury_account",
+              "file_format": "csv",
+              "filters": {
+                  "agency": "all",
+                  "fy": "2022",
+                  "budget_function": "900",
+                  "period": "12",
+                  "submission_types": [
+                      "account_balances",
+                      "object_class_program_activity",
+                      "award_financial",
+                  ],
+              },
+          }
+          client = USASpendingBulkClient(timeout=90)
+          job = client.submit("accounts", payload)
+          print("submit", job.response)
+          completed = client.wait(job, poll_seconds=2, max_polls=90)
+          print("completed", completed)
+          with TemporaryDirectory() as tmp:
+              path = Path(tmp) / (job.file_name or "accounts.zip")
+              client.download_completed(completed, path)
+              print("download_bytes", path.stat().st_size)
+              with ZipFile(path) as archive:
+                  members = [member for member in archive.infolist() if not member.is_dir()]
+                  print("members", [(m.filename, m.file_size) for m in members])
+                  for member in members:
+                      with archive.open(member) as handle:
+                          first = handle.readline().decode("utf-8-sig", errors="replace").strip()
+                          second = handle.readline().decode("utf-8-sig", errors="replace").strip()
+                      print("MEMBER", member.filename)
+                      print("HEADER", first)
+                      print("ROW", second[:1500])
+          PY
