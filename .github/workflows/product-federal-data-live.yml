@@ -1,0 +1,110 @@
+name: Federal Product Data Live Validation
+
+on:
+  push:
+    branches:
+      - data-activation-v1
+    paths:
+      - '.github/workflows/product-federal-data-live.yml'
+      - 'src/taxtrace/warehouse_v2/product_activation.py'
+      - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
+      - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
+      - 'src/taxtrace/warehouse_v2/federal_receipt.py'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/product-federal-data-live.yml'
+      - 'src/taxtrace/warehouse_v2/product_activation.py'
+      - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
+      - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
+      - 'src/taxtrace/warehouse_v2/federal_receipt.py'
+  workflow_dispatch:
+
+jobs:
+  activate-federal-product-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: taxtrace
+          POSTGRES_USER: taxtrace
+          POSTGRES_PASSWORD: taxtrace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taxtrace -d taxtrace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://taxtrace:taxtrace@127.0.0.1:5432/taxtrace
+      RAW_DATA_DIR: /tmp/taxtrace-data/raw
+      WAREHOUSE_DATA_DIR: /tmp/taxtrace-data/warehouse
+      APP_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - run: alembic upgrade head
+      - name: Seed federal methodology and ingest current real federal controls
+        run: |
+          taxtrace warehouse seed
+          taxtrace warehouse ingest-treasury --fiscal-year 2025
+          taxtrace warehouse ingest-omb --fiscal-year 2025
+      - name: Materialize full-year USAspending A/B/C account data
+        run: taxtrace data bootstrap-federal-accounts --fiscal-year 2025 --period 12
+      - name: Verify federal readiness and substantive V2 receipt detail
+        run: |
+          python - <<'PY'
+          from decimal import Decimal
+
+          from taxtrace.allocation.models import FederalReceiptRequest
+          from taxtrace.database import SessionLocal
+          from taxtrace.enums import FilingStatus
+          from taxtrace.search import rebuild_search_index
+          from taxtrace.warehouse_v2.federal_receipt import FederalReceiptV2Engine
+          from taxtrace.warehouse_v2.product_activation import product_data_readiness
+
+          request = FederalReceiptRequest(
+              tax_year=2026,
+              spending_fiscal_year=2025,
+              filing_status=FilingStatus.SINGLE,
+              wage_income=Decimal('50000'),
+              spouse_wage_income=Decimal('0'),
+              qualifying_children_under_17=0,
+              other_dependents=0,
+          )
+          with SessionLocal() as session:
+              rebuild_search_index(session)
+              status = product_data_readiness(session, federal_fiscal_year=2025)
+              print(status.to_dict())
+              assert status.federal_core_ready is True, status
+              assert status.federal_account_detail_ready is True, status
+              assert status.real_omb_account_rows >= 500, status
+              assert status.usaspending_file_b.full_fiscal_year is True, status
+              assert status.usaspending_file_b.row_count > 0, status
+              assert status.usaspending_file_b.local_parquet_objects == status.usaspending_file_b.parquet_objects > 0, status
+              assert status.usaspending_file_c.full_fiscal_year is True, status
+              assert status.usaspending_file_c.row_count > 0, status
+
+              receipt = FederalReceiptV2Engine().calculate(session, request)
+              assert receipt.warehouse.status == 'READY', receipt.warehouse
+              assert receipt.warehouse.full_fiscal_year is True, receipt.warehouse
+              assert receipt.conservation_difference == Decimal('0.00'), receipt
+              matched = [account for account in receipt.accounts if account.warehouse_matched]
+              assert matched, 'No OMB account matched full-year File B detail'
+              assert any(len(account.children) > 1 for account in matched), matched[:10]
+              print({
+                  'total_allocable_taxes': str(receipt.base_receipt.total_allocable_taxes),
+                  'omb_accounts': len(receipt.accounts),
+                  'file_b_matched_accounts': len(matched),
+                  'file_b_rows': receipt.warehouse.row_count,
+                  'file_b_objects': receipt.warehouse.object_count,
+              })
+          PY
