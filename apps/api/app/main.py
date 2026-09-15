@@ -13,6 +13,7 @@ from apps.api.app.routers import (
     receipt,
     receipt_v2,
     search,
+    search_v2,
     tax,
     warehouse,
 )
@@ -46,3 +47,4 @@ app.include_router(methodology.router, prefix="/v1")
 app.include_router(data_v2.router, prefix="/v2")
 app.include_router(receipt_v2.router, prefix="/v2")
 app.include_router(explorer_v2.router, prefix="/v2")
+app.include_router(search_v2.router, prefix="/v2")
