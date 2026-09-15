@@ -5,13 +5,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from zipfile import ZipFile
 
+import httpx
 import pytest
 
 import taxtrace.warehouse_v2.usaspending_bulk as bulk_module
 from taxtrace.warehouse_v2.usaspending_bulk import (
     USASpendingBulkClient,
     USASpendingDownloadJob,
-    _account_agencies_from_response,
+    _reporting_agencies_from_response,
 )
 
 
@@ -45,8 +46,8 @@ def _multi_type_payload() -> dict:
 
 def _agencies() -> list[dict]:
     return [
-        {"toptier_agency_id": "10", "toptier_code": "001", "name": "Agency One"},
-        {"toptier_agency_id": "20", "toptier_code": "002", "name": "Agency Two"},
+        {"abbreviation": "ONE", "agency_id": 10, "toptier_code": "001", "name": "Agency One"},
+        {"abbreviation": "TWO", "agency_id": 20, "toptier_code": "002", "name": "Agency Two"},
     ]
 
 
@@ -91,31 +92,122 @@ def test_download_completed_rejects_ready_state(tmp_path: Path) -> None:
         )
 
 
-def test_account_agency_response_is_deduplicated_and_sorted() -> None:
-    result = _account_agencies_from_response(
+def test_reporting_agency_response_is_deduplicated_and_sorted() -> None:
+    result = _reporting_agencies_from_response(
         {
-            "agencies": {
-                "cfo_agencies": [
-                    {"toptier_agency_id": 20, "toptier_code": "002", "name": "Agency Two"},
-                    {"toptier_agency_id": 10, "toptier_code": "001", "name": "Agency One"},
-                ],
-                "other_agencies": [
-                    {"toptier_agency_id": 20, "toptier_code": "002", "name": "Agency Two"},
-                    {"name": "Missing Identifier"},
-                ],
-            }
+            "results": [
+                {
+                    "agency_id": 20,
+                    "toptier_code": "002",
+                    "abbreviation": "two",
+                    "agency_name": "Agency Two",
+                },
+                {
+                    "agency_id": 10,
+                    "toptier_code": "001",
+                    "abbreviation": "ONE",
+                    "agency_name": "Agency One",
+                },
+                {
+                    "agency_id": 20,
+                    "toptier_code": "002",
+                    "abbreviation": "TWO",
+                    "agency_name": "Agency Two",
+                },
+            ]
         }
     )
 
     assert result == _agencies()
 
 
-def test_file_c_all_agency_request_shards_by_dabs_agency(
+def test_reporting_agency_response_refuses_missing_abbreviation() -> None:
+    with pytest.raises(RuntimeError, match="without an abbreviation"):
+        _reporting_agencies_from_response(
+            {"results": [{"agency_id": 10, "toptier_code": "001", "agency_name": "Agency One"}]}
+        )
+
+
+def test_submit_retries_transient_server_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("POST", "https://api.usaspending.gov/api/v2/download/accounts/")
+    responses = iter(
+        [
+            httpx.Response(500, request=request),
+            httpx.Response(503, request=request),
+            httpx.Response(
+                200,
+                request=request,
+                json={"file_name": "accounts.zip", "file_url": "https://files/accounts.zip"},
+            ),
+        ]
+    )
+    calls = 0
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, _url: str, json: dict):
+            nonlocal calls
+            calls += 1
+            assert json["filters"]["fy"] == "2025"
+            return next(responses)
+
+    monkeypatch.setattr(bulk_module.httpx, "Client", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda _seconds: None)
+
+    client = USASpendingBulkClient(timeout=1)
+    job = client._submit_one(
+        "accounts",
+        {"filters": {"fy": "2025", "submission_types": ["account_balances"]}},
+    )
+
+    assert calls == 3
+    assert job.file_name == "accounts.zip"
+
+
+def test_submit_does_not_retry_nontransient_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("POST", "https://api.usaspending.gov/api/v2/download/accounts/")
+    calls = 0
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, _url: str, json: dict):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(400, request=request, json={"detail": "bad request"})
+
+    monkeypatch.setattr(bulk_module.httpx, "Client", lambda **_kwargs: FakeClient())
+
+    client = USASpendingBulkClient(timeout=1)
+    with pytest.raises(httpx.HTTPStatusError):
+        client._submit_one(
+            "accounts",
+            {"filters": {"fy": "2025", "submission_types": ["account_balances"]}},
+        )
+    assert calls == 1
+
+
+def test_file_c_all_agency_request_shards_by_current_reporting_agency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
     submitted: list[dict] = []
-    monkeypatch.setattr(client, "account_agencies", _agencies)
+    seen_period: list[tuple[int, int]] = []
+
+    def fake_reporting_agencies(fiscal_year: int, fiscal_period: int) -> list[dict]:
+        seen_period.append((fiscal_year, fiscal_period))
+        return _agencies()
+
+    monkeypatch.setattr(client, "reporting_agencies", fake_reporting_agencies)
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submitted.append(payload)
@@ -135,21 +227,22 @@ def test_file_c_all_agency_request_shards_by_dabs_agency(
 
     job = client.submit("accounts", payload)
 
+    assert seen_period == [(2025, 12)]
     assert job.file_name == "FY2025P12_TaxTrace_AgencySharded_FileC.zip"
-    assert job.response["split_strategy"] == "file_c_by_dabs_toptier_agency"
+    assert job.response["split_strategy"] == "file_c_by_reporting_agency"
     assert job.response["agency_count"] == 2
-    assert [item["filters"]["agency"] for item in submitted] == ["10", "20"]
+    assert [item["filters"]["agency"] for item in submitted] == ["ONE", "TWO"]
     assert all(item["filters"]["submission_types"] == ["award_financial"] for item in submitted)
     assert payload["filters"]["agency"] == "all"
     assert len(job.response["split_jobs"]) == 2
 
 
-def test_account_submit_splits_a_b_and_flattens_file_c_agency_shards(
+def test_account_submit_splits_a_b_and_flattens_file_c_reporting_agency_shards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
     submitted: list[dict] = []
-    monkeypatch.setattr(client, "account_agencies", _agencies)
+    monkeypatch.setattr(client, "reporting_agencies", lambda _year, _period: _agencies())
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submitted.append(payload)
@@ -171,7 +264,7 @@ def test_account_submit_splits_a_b_and_flattens_file_c_agency_shards(
 
     assert job.file_name == "FY2025P12_TaxTrace_Split_AccountData.zip"
     assert job.direct_url == "taxtrace-split://FY2025P12_TaxTrace_Split_AccountData.zip"
-    assert job.response["split_strategy"] == "submission_type_with_file_c_dabs_agency_shards"
+    assert job.response["split_strategy"] == "submission_type_with_file_c_reporting_agency_shards"
     assert job.response["file_c_agency_count"] == 2
     assert len(job.response["split_jobs"]) == 4
     assert [
@@ -183,8 +276,8 @@ def test_account_submit_splits_a_b_and_flattens_file_c_agency_shards(
     ] == [
         ("account_balances", "all"),
         ("object_class_program_activity", "all"),
-        ("award_financial", "10"),
-        ("award_financial", "20"),
+        ("award_financial", "ONE"),
+        ("award_financial", "TWO"),
     ]
     assert original_payload["filters"]["agency"] == "all"
     assert original_payload["filters"]["submission_types"] == [
@@ -196,7 +289,7 @@ def test_account_submit_splits_a_b_and_flattens_file_c_agency_shards(
 
 def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     client = USASpendingBulkClient(timeout=1)
-    monkeypatch.setattr(client, "account_agencies", _agencies)
+    monkeypatch.setattr(client, "reporting_agencies", lambda _year, _period: _agencies())
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submission_type = payload["filters"]["submission_types"][0]
