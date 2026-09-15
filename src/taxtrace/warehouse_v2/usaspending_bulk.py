@@ -23,6 +23,7 @@ DOWNLOAD_ENDPOINTS = {
     "assistance": f"{API_ROOT}/download/assistance/",
 }
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
+ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
 
 # USAspending can report `ready` before the generated object is retrievable from
 # files.usaspending.gov. A real account-download run observed the transition
@@ -51,6 +52,26 @@ class USASpendingDownloadJob:
         )
 
 
+def _account_agencies_from_response(payload: dict) -> list[dict]:
+    agency_groups = payload.get("agencies") or {}
+    raw_agencies = [
+        *(agency_groups.get("cfo_agencies") or []),
+        *(agency_groups.get("other_agencies") or []),
+    ]
+    by_id: dict[str, dict] = {}
+    for agency in raw_agencies:
+        agency_id = agency.get("toptier_agency_id")
+        if agency_id is None:
+            continue
+        key = str(agency_id)
+        by_id[key] = {
+            "toptier_agency_id": key,
+            "toptier_code": agency.get("toptier_code"),
+            "name": agency.get("name"),
+        }
+    return sorted(by_id.values(), key=lambda agency: int(agency["toptier_agency_id"]))
+
+
 class USASpendingBulkClient:
     """Durable client around USAspending's official asynchronous download surfaces.
 
@@ -66,10 +87,16 @@ class USASpendingBulkClient:
     Full-year all-agency account requests are large enough that USAspending can accept the job,
     spend many minutes generating it, and then fail server-side. A/B/C are separate DATA Act
     submission grains and TaxTrace already materializes them into separate datasets, so a request
-    containing multiple account submission types is transparently split into one official job per
-    submission type. The completed official archives are streamed into one local ZIP before the
-    existing account-lake materializer sees them. This changes transport only, not source grain or
-    release provenance.
+    containing multiple account submission types is transparently split by submission type.
+
+    Live FY2025 validation further proved that the all-agency File C `award_financial` component
+    fails independently after roughly sixteen minutes of upstream generation. File C is therefore
+    transport-sharded across USAspending's official `account_agencies` universe: one disjoint
+    top-tier-agency job per DABS-submitting agency. File A/B remain all-agency jobs. All component
+    jobs are submitted before polling so the upstream generator may process them concurrently.
+    Completed official archives are streamed into one local ZIP before the existing account-lake
+    materializer sees them. This changes transport only, not source grain, fiscal-period evidence,
+    additivity, or release provenance.
     """
 
     def __init__(self, timeout: float | None = None):
@@ -86,25 +113,85 @@ class USASpendingBulkClient:
             data = response.json()
         return USASpendingDownloadJob(kind=kind, request=payload, response=data)
 
+    def account_agencies(self) -> list[dict]:
+        """Return the unique top-tier agencies USAspending says have DABS submissions."""
+        with httpx.Client(
+            timeout=self.timeout, follow_redirects=True, headers=self.headers
+        ) as client:
+            response = client.post(ACCOUNT_AGENCIES_ENDPOINT, json={"type": "account_agencies"})
+            response.raise_for_status()
+            agencies = _account_agencies_from_response(response.json())
+        if not agencies:
+            raise RuntimeError("USAspending returned no DABS account agencies for File C sharding")
+        return agencies
+
+    @staticmethod
+    def _job_record(job: USASpendingDownloadJob) -> dict:
+        return {
+            "kind": job.kind,
+            "request": job.request,
+            "response": job.response,
+        }
+
+    def _submit_file_c_agency_shards(self, payload: dict) -> USASpendingDownloadJob:
+        filters = payload.get("filters") or {}
+        agencies = self.account_agencies()
+        split_jobs: list[dict] = []
+        for agency in agencies:
+            shard_payload = json.loads(json.dumps(payload))
+            shard_payload["filters"]["agency"] = agency["toptier_agency_id"]
+            shard = self._submit_one("accounts", shard_payload)
+            split_jobs.append(self._job_record(shard))
+
+        fiscal_year = filters.get("fy", "unknown")
+        period = filters.get("period") or filters.get("quarter") or "unknown"
+        synthetic_name = f"FY{fiscal_year}P{period}_TaxTrace_AgencySharded_FileC.zip"
+        return USASpendingDownloadJob(
+            kind="accounts",
+            request=payload,
+            response={
+                "status": "submitted",
+                "file_name": synthetic_name,
+                "file_url": f"taxtrace-split://{synthetic_name}",
+                "split_strategy": "file_c_by_dabs_toptier_agency",
+                "agency_count": len(agencies),
+                "split_jobs": split_jobs,
+            },
+        )
+
     def submit(self, kind: str, payload: dict) -> USASpendingDownloadJob:
         if kind not in DOWNLOAD_ENDPOINTS:
             raise ValueError(f"kind must be one of {sorted(DOWNLOAD_ENDPOINTS)}")
 
         filters = payload.get("filters") or {}
         submission_types = filters.get("submission_types") or []
+        agency = str(filters.get("agency") or "all").lower()
+
+        # The full-year all-agency File C generator is independently unreliable upstream.
+        # Agency is an official account-download filter whose top-tier values are unique, so
+        # these shards partition the source without changing the File C accounting grain.
+        if (
+            kind == "accounts"
+            and submission_types == ["award_financial"]
+            and agency == "all"
+        ):
+            return self._submit_file_c_agency_shards(payload)
+
         if kind == "accounts" and len(submission_types) > 1:
             split_jobs: list[dict] = []
+            file_c_agency_count = 0
             for submission_type in submission_types:
                 component_payload = json.loads(json.dumps(payload))
                 component_payload["filters"]["submission_types"] = [submission_type]
-                component = self._submit_one(kind, component_payload)
-                split_jobs.append(
-                    {
-                        "kind": component.kind,
-                        "request": component.request,
-                        "response": component.response,
-                    }
-                )
+                component = self.submit(kind, component_payload)
+                nested = component.response.get("split_jobs") or []
+                if nested:
+                    split_jobs.extend(nested)
+                    if submission_type == "award_financial":
+                        file_c_agency_count = int(component.response.get("agency_count") or 0)
+                else:
+                    split_jobs.append(self._job_record(component))
+
             fiscal_year = filters.get("fy", "unknown")
             period = filters.get("period") or filters.get("quarter") or "unknown"
             synthetic_name = f"FY{fiscal_year}P{period}_TaxTrace_Split_AccountData.zip"
@@ -115,6 +202,8 @@ class USASpendingBulkClient:
                     "status": "submitted",
                     "file_name": synthetic_name,
                     "file_url": f"taxtrace-split://{synthetic_name}",
+                    "split_strategy": "submission_type_with_file_c_dabs_agency_shards",
+                    "file_c_agency_count": file_c_agency_count,
                     "split_jobs": split_jobs,
                 },
             )
@@ -193,7 +282,7 @@ class USASpendingBulkClient:
                         or component.get("filename")
                         or f"component_{archive_index:02d}.zip"
                     )
-                    component_path = temp_root / Path(component_name).name
+                    component_path = temp_root / f"{archive_index:04d}_{Path(component_name).name}"
                     self.download_completed(component, component_path)
                     with ZipFile(component_path) as source:
                         for member_index, member in enumerate(source.infolist(), start=1):
@@ -203,7 +292,7 @@ class USASpendingBulkClient:
                             if not safe_name:
                                 continue
                             combined_name = (
-                                f"component_{archive_index:02d}/"
+                                f"component_{archive_index:04d}/"
                                 f"{member_index:04d}_{safe_name}"
                             )
                             with source.open(member) as source_file, combined.open(
