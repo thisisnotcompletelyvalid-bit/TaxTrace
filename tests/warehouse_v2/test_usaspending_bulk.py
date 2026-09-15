@@ -12,6 +12,7 @@ import taxtrace.warehouse_v2.usaspending_bulk as bulk_module
 from taxtrace.warehouse_v2.usaspending_bulk import (
     USASpendingBulkClient,
     USASpendingDownloadJob,
+    _account_agency_ids_from_response,
     _reporting_agencies_from_response,
 )
 
@@ -44,10 +45,27 @@ def _multi_type_payload() -> dict:
     }
 
 
+def _reporting_agencies() -> list[dict]:
+    return [
+        {"abbreviation": "ONE", "toptier_code": "001", "name": "Agency One"},
+        {"abbreviation": "TWO", "toptier_code": "002", "name": "Agency Two"},
+    ]
+
+
 def _agencies() -> list[dict]:
     return [
-        {"abbreviation": "ONE", "agency_id": 10, "toptier_code": "001", "name": "Agency One"},
-        {"abbreviation": "TWO", "agency_id": 20, "toptier_code": "002", "name": "Agency Two"},
+        {
+            "abbreviation": "ONE",
+            "toptier_code": "001",
+            "name": "Agency One",
+            "toptier_agency_id": 101,
+        },
+        {
+            "abbreviation": "TWO",
+            "toptier_code": "002",
+            "name": "Agency Two",
+            "toptier_agency_id": 202,
+        },
     ]
 
 
@@ -92,40 +110,113 @@ def test_download_completed_rejects_ready_state(tmp_path: Path) -> None:
         )
 
 
-def test_reporting_agency_response_is_deduplicated_and_sorted() -> None:
+def test_reporting_agency_response_filters_stale_rows_and_sorts() -> None:
     result = _reporting_agencies_from_response(
         {
             "results": [
                 {
-                    "agency_id": 20,
                     "toptier_code": "002",
                     "abbreviation": "two",
                     "agency_name": "Agency Two",
+                    "recent_publication_date": "2025-10-15T00:00:00Z",
                 },
                 {
-                    "agency_id": 10,
+                    "toptier_code": "999",
+                    "abbreviation": "OLD",
+                    "agency_name": "Stale Agency",
+                    "recent_publication_date": None,
+                },
+                {
                     "toptier_code": "001",
                     "abbreviation": "ONE",
                     "agency_name": "Agency One",
+                    "recent_publication_date": "2025-10-14T00:00:00Z",
                 },
                 {
-                    "agency_id": 20,
                     "toptier_code": "002",
                     "abbreviation": "TWO",
                     "agency_name": "Agency Two",
+                    "recent_publication_date": "2025-10-15T00:00:00Z",
                 },
             ]
         }
     )
 
-    assert result == _agencies()
+    assert result == _reporting_agencies()
 
 
 def test_reporting_agency_response_refuses_missing_abbreviation() -> None:
     with pytest.raises(RuntimeError, match="without an abbreviation"):
         _reporting_agencies_from_response(
-            {"results": [{"agency_id": 10, "toptier_code": "001", "agency_name": "Agency One"}]}
+            {
+                "results": [
+                    {
+                        "toptier_code": "001",
+                        "agency_name": "Agency One",
+                        "recent_publication_date": "2025-10-14T00:00:00Z",
+                    }
+                ]
+            }
         )
+
+
+def test_account_agency_reference_parses_flat_and_grouped_shapes() -> None:
+    flat = _account_agency_ids_from_response(
+        {
+            "agencies": [
+                {"toptier_code": "001", "toptier_agency_id": 101, "name": "Agency One"},
+                {"toptier_code": "002", "toptier_agency_id": "202", "name": "Agency Two"},
+            ]
+        }
+    )
+    grouped = _account_agency_ids_from_response(
+        {
+            "agencies": {
+                "cfo_agencies": [
+                    {"toptier_code": "001", "toptier_agency_id": 101, "name": "Agency One"}
+                ],
+                "other_agencies": [
+                    {"toptier_code": "002", "toptier_agency_id": 202, "name": "Agency Two"}
+                ],
+            }
+        }
+    )
+
+    assert flat == {"001": 101, "002": 202}
+    assert grouped == flat
+
+
+def test_account_agency_reference_refuses_conflicting_ids() -> None:
+    with pytest.raises(RuntimeError, match="conflicting toptier agency IDs"):
+        _account_agency_ids_from_response(
+            {
+                "agencies": [
+                    {"toptier_code": "001", "toptier_agency_id": 101},
+                    {"toptier_code": "001", "toptier_agency_id": 999},
+                ]
+            }
+        )
+
+
+def test_current_reporting_account_agencies_strictly_joins_internal_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    monkeypatch.setattr(client, "reporting_agencies", lambda _year, _period: _reporting_agencies())
+    monkeypatch.setattr(client, "account_agency_ids", lambda: {"001": 101, "002": 202})
+
+    assert client.current_reporting_account_agencies(2025, 12) == _agencies()
+
+
+def test_current_reporting_account_agencies_fails_closed_on_missing_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    monkeypatch.setattr(client, "reporting_agencies", lambda _year, _period: _reporting_agencies())
+    monkeypatch.setattr(client, "account_agency_ids", lambda: {"001": 101})
+
+    with pytest.raises(RuntimeError, match="002:TWO"):
+        client.current_reporting_account_agencies(2025, 12)
 
 
 def test_submit_retries_transient_server_errors(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -237,18 +328,18 @@ def test_submit_does_not_retry_nontransient_client_error(monkeypatch: pytest.Mon
     assert calls == 1
 
 
-def test_file_c_all_agency_request_shards_by_current_reporting_agency(
+def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
     submitted: list[dict] = []
     seen_period: list[tuple[int, int]] = []
 
-    def fake_reporting_agencies(fiscal_year: int, fiscal_period: int) -> list[dict]:
+    def fake_current_agencies(fiscal_year: int, fiscal_period: int) -> list[dict]:
         seen_period.append((fiscal_year, fiscal_period))
         return _agencies()
 
-    monkeypatch.setattr(client, "reporting_agencies", fake_reporting_agencies)
+    monkeypatch.setattr(client, "current_reporting_account_agencies", fake_current_agencies)
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submitted.append(payload)
@@ -270,20 +361,24 @@ def test_file_c_all_agency_request_shards_by_current_reporting_agency(
 
     assert seen_period == [(2025, 12)]
     assert job.file_name == "FY2025P12_TaxTrace_AgencySharded_FileC.zip"
-    assert job.response["split_strategy"] == "file_c_by_reporting_agency"
+    assert job.response["split_strategy"] == "file_c_by_current_reporting_toptier_agency_id"
     assert job.response["agency_count"] == 2
-    assert [item["filters"]["agency"] for item in submitted] == ["ONE", "TWO"]
+    assert [item["filters"]["agency"] for item in submitted] == ["101", "202"]
     assert all(item["filters"]["submission_types"] == ["award_financial"] for item in submitted)
     assert payload["filters"]["agency"] == "all"
     assert len(job.response["split_jobs"]) == 2
 
 
-def test_account_submit_splits_a_b_and_flattens_file_c_reporting_agency_shards(
+def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
     submitted: list[dict] = []
-    monkeypatch.setattr(client, "reporting_agencies", lambda _year, _period: _agencies())
+    monkeypatch.setattr(
+        client,
+        "current_reporting_account_agencies",
+        lambda _year, _period: _agencies(),
+    )
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submitted.append(payload)
@@ -305,7 +400,10 @@ def test_account_submit_splits_a_b_and_flattens_file_c_reporting_agency_shards(
 
     assert job.file_name == "FY2025P12_TaxTrace_Split_AccountData.zip"
     assert job.direct_url == "taxtrace-split://FY2025P12_TaxTrace_Split_AccountData.zip"
-    assert job.response["split_strategy"] == "submission_type_with_file_c_reporting_agency_shards"
+    assert (
+        job.response["split_strategy"]
+        == "submission_type_with_file_c_current_reporting_toptier_agency_id_shards"
+    )
     assert job.response["file_c_agency_count"] == 2
     assert len(job.response["split_jobs"]) == 4
     assert [
@@ -317,8 +415,8 @@ def test_account_submit_splits_a_b_and_flattens_file_c_reporting_agency_shards(
     ] == [
         ("account_balances", "all"),
         ("object_class_program_activity", "all"),
-        ("award_financial", "ONE"),
-        ("award_financial", "TWO"),
+        ("award_financial", "101"),
+        ("award_financial", "202"),
     ]
     assert original_payload["filters"]["agency"] == "all"
     assert original_payload["filters"]["submission_types"] == [
@@ -330,7 +428,11 @@ def test_account_submit_splits_a_b_and_flattens_file_c_reporting_agency_shards(
 
 def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     client = USASpendingBulkClient(timeout=1)
-    monkeypatch.setattr(client, "reporting_agencies", lambda _year, _period: _agencies())
+    monkeypatch.setattr(
+        client,
+        "current_reporting_account_agencies",
+        lambda _year, _period: _agencies(),
+    )
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submission_type = payload["filters"]["submission_types"][0]
