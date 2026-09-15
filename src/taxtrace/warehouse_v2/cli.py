@@ -27,6 +27,10 @@ from taxtrace.warehouse_v2.db_models import (
     GovernmentFinanceFact,
     GovernmentIdentifier,
 )
+from taxtrace.warehouse_v2.usaspending_accounts import (
+    activate_federal_account_archives,
+    federal_account_download_requests,
+)
 from taxtrace.warehouse_v2.usaspending_award_lake import (
     inspect_award_archive,
     materialize_award_archive,
@@ -225,44 +229,25 @@ def bootstrap_federal_accounts(
     period: int = typer.Option(12, "--period", min=1, max=12),
     wait: bool = typer.Option(True, "--wait/--no-wait"),
 ) -> None:
-    """Request, download, and normalize all-agency USAspending File A/B/C account data."""
-    payload = {
-        "account_level": "treasury_account",
-        "file_format": "csv",
-        "filters": {
-            "agency": "all",
-            "fy": str(fiscal_year),
-            "period": str(period),
-            "submission_types": [
-                "account_balances",
-                "object_class_program_activity",
-                "award_financial",
-            ],
-        },
-    }
-    client = USASpendingBulkClient()
-    job = client.submit("accounts", payload)
-    response = client.wait(job) if wait else job.response
-    result: dict[str, object] = {"request": payload, "response": response}
+    """Request and normalize TAS File A/B plus Federal Account File C."""
     if wait:
-        url = response.get("file_url") or response.get("download_url") or response.get("url")
-        if url:
-            destination = (
-                get_settings().raw_data_dir
-                / "usaspending"
-                / str(fiscal_year)
-                / Path(url.split("?", 1)[0]).name
+        with SessionLocal() as session:
+            result = activate_federal_account_archives(
+                session,
+                fiscal_year=fiscal_year,
+                period=period,
             )
-            client.download_completed(response, destination)
-            with SessionLocal() as session:
-                seed_catalog(session)
-                result["warehouse"] = materialize_account_archive(
-                    session,
-                    destination,
-                    fiscal_year=fiscal_year,
-                    request=payload,
-                )
-            result["response"] = {**response, "taxtrace_local_path": str(destination)}
+    else:
+        requests = federal_account_download_requests(fiscal_year, period)
+        client = USASpendingBulkClient()
+        jobs = {
+            key: client.submit("accounts", payload)
+            for key, payload in requests.items()
+        }
+        result = {
+            "requests": requests,
+            "responses": {key: job.response for key, job in jobs.items()},
+        }
     typer.echo(json.dumps(result, indent=2))
 
 
