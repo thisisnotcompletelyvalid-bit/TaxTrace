@@ -27,83 +27,49 @@ jobs:
           from taxtrace.warehouse_v2.download import stream_download
 
           root = Path('/tmp/taxtrace-census')
-          stream_download(
-              'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip',
-              root / '2022_Individual_Unit_File.zip',
-              overwrite=True,
-          )
-          stream_download(
-              'https://www2.census.gov/programs-surveys/state/technical-documentation/methodology/methodology_summary_tabulations.xlsx',
-              root / 'methodology_summary_tabulations.xlsx',
-              overwrite=True,
-          )
-          stream_download(
-              'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx',
-              root / '22slsstab1.xlsx',
-              overwrite=True,
-          )
+          for url, name in (
+              ('https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip', '2022_Individual_Unit_File.zip'),
+              ('https://www2.census.gov/programs-surveys/state/technical-documentation/methodology/methodology_summary_tabulations.xlsx', 'methodology_summary_tabulations.xlsx'),
+              ('https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx', '22slsstab1.xlsx'),
+          ):
+              stream_download(url, root / name, overwrite=True)
           PY
-      - name: Extract direct-general formulas from Census methodology workbook
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          from openpyxl import load_workbook
-
-          root = Path('/tmp/taxtrace-census')
-          path = root / 'methodology_summary_tabulations.xlsx'
-          workbook_formula = load_workbook(path, read_only=True, data_only=False)
-          workbook_values = load_workbook(path, read_only=True, data_only=True)
-          print('FORMULA_WORKBOOK_SHEETS', workbook_formula.sheetnames)
-
-          needles = (
-              'direct general',
-              'capital outlay',
-              'other direct general',
-              'elementary',
-              'higher education',
-              'education',
-              'interest on debt',
-              'assistance and subsidies',
-          )
-          for sheet_name in workbook_formula.sheetnames:
-              formula_sheet = workbook_formula[sheet_name]
-              value_sheet = workbook_values[sheet_name]
-              print('SHEET_DIMENSIONS', sheet_name, formula_sheet.max_row, formula_sheet.max_column)
-              matches = []
-              for row_index, row in enumerate(formula_sheet.iter_rows(values_only=True), start=1):
-                  text = ' | '.join(str(value) for value in row if value is not None).lower()
-                  if any(needle in text for needle in needles):
-                      matches.append(row_index)
-              print('MATCH_ROWS', sheet_name, matches[:300])
-              expanded = set()
-              for row_index in matches:
-                  for candidate in range(max(1, row_index - 2), min(formula_sheet.max_row, row_index + 2) + 1):
-                      expanded.add(candidate)
-              for row_index in sorted(expanded):
-                  formula_values = [cell.value for cell in formula_sheet[row_index]]
-                  data_values = [cell.value for cell in value_sheet[row_index]]
-                  print('FORMULA_ROW', sheet_name, row_index, formula_values[:40])
-                  if data_values != formula_values:
-                      print('VALUE_ROW', sheet_name, row_index, data_values[:40])
-          PY
-      - name: Compare methodology formulas with public-use and published controls
+      - name: Identify governing formula variant and reconciliation gap
         run: |
           python - <<'PY'
           from collections import defaultdict
           from decimal import Decimal
           from pathlib import Path
           from zipfile import ZipFile
+
           from openpyxl import load_workbook
 
-          from taxtrace.warehouse_v2.census import iter_finance_records
-          from taxtrace.warehouse_v2.census_taxonomy import POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES
-
           root = Path('/tmp/taxtrace-census')
-          source = root / '2022_Individual_Unit_File.zip'
-          raw_by_code = defaultdict(lambda: Decimal('0'))
-          for record in iter_finance_records(source):
-              raw_by_code[record.item_code.upper()] += record.amount_dollars
+          method = load_workbook(root / 'methodology_summary_tabulations.xlsx', read_only=True, data_only=True)
+          sheet = method['Summary Tabulations']
 
+          print('METHODOLOGY_HEADER_ROWS')
+          for row_index in range(1, 5):
+              print('HEADER', row_index, [cell.value for cell in sheet[row_index]])
+
+          row177 = [cell.value for cell in sheet[177]]
+          print('ROW177', row177)
+          formula_columns = {'D': 3, 'F': 5, 'H': 7, 'J': 9, 'L': 11}
+          formulas = {}
+          for label, zero_index in formula_columns.items():
+              value = row177[zero_index]
+              codes = tuple(code.strip() for code in str(value).split(',') if code and code.strip())
+              formulas[label] = codes
+              print('FORMULA_VARIANT', label, 'count', len(codes), 'codes', codes)
+
+          print('FIRE_ROWS')
+          for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+              values = list(row)
+              joined = ' | '.join(str(value) for value in values if value is not None)
+              if 'E24' in joined or 'F24' in joined or 'Fire Protection' in joined:
+                  print('FIRE_ROW', row_index, values)
+
+          source = root / '2022_Individual_Unit_File.zip'
           with ZipFile(source) as archive:
               state_type_name = next(name for name in archive.namelist() if name.endswith('22statetypepu.txt'))
               lines = archive.read(state_type_name).decode('utf-8-sig', errors='replace').splitlines()
@@ -112,20 +78,48 @@ jobs:
           for line in lines:
               if len(line) < 20 or line[:3] != '001':
                   continue
-              item = line[4:7].strip().upper()
+              code = line[4:7].strip().upper()
               try:
-                  amount = Decimal(line[7:20].strip()) * Decimal('1000')
+                  public_all[code] += Decimal(line[7:20].strip()) * Decimal('1000')
               except Exception:
-                  continue
-              public_all[item] += amount
-
-          raw_formula_total = sum((raw_by_code[code] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES), Decimal('0'))
-          public_formula_total = sum((public_all[code] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES), Decimal('0'))
-          print('CURRENT_FORMULA_TOTALS', {'raw': str(raw_formula_total), 'public_001': str(public_formula_total), 'difference': str(raw_formula_total - public_formula_total)})
+                  pass
 
           published = load_workbook(root / '22slsstab1.xlsx', read_only=True, data_only=True)
-          sheet = published[published.sheetnames[0]]
-          for row_index in range(82, 101):
-              values = list(next(sheet.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))
-              print('PUBLISHED_ROW', row_index, values[:8])
+          published_sheet = published[published.sheetnames[0]]
+          published_direct_general = Decimal(str(published_sheet['C91'].value)) * Decimal('1000')
+          published_capital = Decimal(str(published_sheet['C92'].value)) * Decimal('1000')
+          print('PUBLISHED_CONTROLS', {'direct_general': str(published_direct_general), 'capital': str(published_capital)})
+
+          for label, codes in formulas.items():
+              total = sum((public_all[code] for code in codes), Decimal('0'))
+              print('VARIANT_RECONCILIATION', label, 'total', total, 'difference', total - published_direct_general)
+
+          all_candidate_codes = set().union(*map(set, formulas.values()))
+          active_expenditure = {
+              code: amount
+              for code, amount in public_all.items()
+              if code and code[0] in {'E', 'F', 'G', 'I', 'J', 'K'} and amount != 0
+          }
+          print('ACTIVE_EXPENDITURE_OUTSIDE_ALL_VARIANTS')
+          for code, amount in sorted(
+              ((code, amount) for code, amount in active_expenditure.items() if code not in all_candidate_codes),
+              key=lambda pair: pair[1],
+              reverse=True,
+          ):
+              print('OUTSIDE_ALL', code, amount)
+
+          print('J_VARIANT_EXCLUDED_ACTIVE_CODES')
+          j_codes = set(formulas['J'])
+          for code, amount in sorted(
+              ((code, amount) for code, amount in active_expenditure.items() if code not in j_codes),
+              key=lambda pair: pair[1],
+              reverse=True,
+          ):
+              print('J_EXCLUDED', code, amount)
+
+          target_offset = published_direct_general - sum((public_all[code] for code in formulas['J']), Decimal('0'))
+          print('J_TARGET_OFFSET', target_offset)
+          nearest = sorted(active_expenditure.items(), key=lambda pair: abs(pair[1] - target_offset))[:30]
+          for code, amount in nearest:
+              print('NEAREST_SINGLE', code, amount, 'remaining', target_offset - amount)
           PY
