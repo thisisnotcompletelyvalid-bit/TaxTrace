@@ -31,43 +31,93 @@ jobs:
               overwrite=True,
           )
           PY
-      - name: Inspect parent-ID file and raw finance layout
+      - name: Reconcile individual units to state-type public-use file
         run: |
           python - <<'PY'
-          from collections import Counter
+          from collections import Counter, defaultdict
+          from decimal import Decimal
           from pathlib import Path
           from zipfile import ZipFile
 
+          from taxtrace.warehouse_v2.census import iter_finance_records
+          from taxtrace.warehouse_v2.census_taxonomy import POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES
+
           source = Path('/tmp/taxtrace-census/2022_Individual_Unit_File.zip')
+          raw_by_type_code = defaultdict(lambda: Decimal('0'))
+          raw_by_code = defaultdict(lambda: Decimal('0'))
+          for record in iter_finance_records(source):
+              code = record.item_code.upper()
+              amount = record.amount_dollars
+              gov_type = record.government_id[2]
+              raw_by_type_code[(gov_type, code)] += amount
+              raw_by_code[code] += amount
+
           with ZipFile(source) as archive:
-              members = {m.filename: m for m in archive.infolist()}
-              pid_name = next(name for name in members if name.endswith('Fin_PID_2022.txt'))
-              fin_name = next(name for name in members if 'FinEstDAT' in name)
-              state_type_name = next(name for name in members if name.endswith('22statetypepu.txt'))
+              state_type_name = next(name for name in archive.namelist() if name.endswith('22statetypepu.txt'))
+              lines = archive.read(state_type_name).decode('utf-8-sig', errors='replace').splitlines()
+              technical_name = next(name for name in archive.namelist() if name.endswith('Technical Documentation.pdf'))
+              Path('/tmp/taxtrace-census/technical.pdf').write_bytes(archive.read(technical_name))
 
-              print('PID_MEMBER', pid_name, members[pid_name].file_size)
-              print('FINANCE_MEMBER', fin_name, members[fin_name].file_size)
-              print('STATE_TYPE_MEMBER', state_type_name, members[state_type_name].file_size)
+          prefixes = Counter()
+          public_by_state_type_code = defaultdict(lambda: Decimal('0'))
+          for line in lines:
+              if len(line) < 20:
+                  continue
+              prefix = line[:3]
+              item = line[4:7].strip().upper()
+              try:
+                  amount_thousands = Decimal(line[7:20].strip())
+              except Exception:
+                  continue
+              prefixes[prefix] += 1
+              state = prefix[:2]
+              gov_type = prefix[2]
+              public_by_state_type_code[(state, gov_type, item)] += amount_thousands * Decimal('1000')
 
-              pid_lines = archive.read(pid_name).decode('utf-8-sig', errors='replace').splitlines()
-              fin_lines = archive.read(fin_name).decode('utf-8-sig', errors='replace').splitlines()
-              state_lines = archive.read(state_type_name).decode('utf-8-sig', errors='replace').splitlines()
+          print('PREFIX_SAMPLE', prefixes.most_common(30))
+          print('NATIONAL_PREFIXES', sorted((p, n) for p, n in prefixes.items() if p.startswith('00')))
 
-              print('PID_LINE_COUNT', len(pid_lines))
-              print('PID_FIRST_LINES')
-              for index, line in enumerate(pid_lines[:60], start=1):
-                  print('PID_LINE', index, len(line), repr(line))
+          print('TYPE_RECONCILIATION')
+          for gov_type in '012345':
+              raw_total = sum(
+                  (raw_by_type_code[(gov_type, code)] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES),
+                  Decimal('0'),
+              )
+              public_total = sum(
+                  (public_by_state_type_code[('00', gov_type, code)] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES),
+                  Decimal('0'),
+              )
+              print('TYPE_TOTAL', gov_type, 'raw', raw_total, 'public', public_total, 'difference', raw_total - public_total)
 
-              print('FINANCE_FIRST_LINES')
-              for index, line in enumerate(fin_lines[:15], start=1):
-                  print('FIN_LINE', index, len(line), repr(line))
+          print('EDUCATION_RECONCILIATION')
+          for gov_type in '012345':
+              raw = raw_by_type_code[(gov_type, 'E12')] + raw_by_type_code[(gov_type, 'F12')]
+              public = public_by_state_type_code[('00', gov_type, 'E12')] + public_by_state_type_code[('00', gov_type, 'F12')]
+              print('E12_F12', gov_type, 'raw', raw, 'public', public, 'difference', raw - public)
 
-              print('STATE_TYPE_FIRST_LINES')
-              for index, line in enumerate(state_lines[:30], start=1):
-                  print('STATE_LINE', index, len(line), repr(line))
+          print('LARGEST_TYPE_CODE_DIFFERENCES')
+          diffs = []
+          for gov_type in '012345':
+              for code in sorted(POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES):
+                  raw = raw_by_type_code[(gov_type, code)]
+                  public = public_by_state_type_code[('00', gov_type, code)]
+                  diff = raw - public
+                  if diff:
+                      diffs.append((abs(diff), gov_type, code, raw, public, diff))
+          for _, gov_type, code, raw, public, diff in sorted(diffs, reverse=True)[:80]:
+              print('TYPE_CODE_DIFF', gov_type, code, 'raw', raw, 'public', public, 'difference', diff)
 
-              pid_lengths = Counter(map(len, pid_lines))
-              pid_prefixes = Counter(line[:2] for line in pid_lines if line)
-              print('PID_LENGTHS', pid_lengths.most_common(20))
-              print('PID_PREFIXES', pid_prefixes.most_common(20))
+          print('ACTIVE_F_CODES_OUTSIDE_FORMULA')
+          outside_f = [
+              (amount, code)
+              for code, amount in raw_by_code.items()
+              if code.startswith('F') and code not in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES and amount != 0
+          ]
+          for amount, code in sorted(outside_f, reverse=True)[:50]:
+              print('OUTSIDE_F', code, amount)
           PY
+      - name: Inspect technical documentation for tabulation notes
+        run: |
+          pdftotext -layout /tmp/taxtrace-census/technical.pdf /tmp/taxtrace-census/technical.txt
+          echo '--- dependent / school / state type / public use / aggregate matches ---'
+          grep -inE 'dependent|school|state.?type|public use|aggregate|double.?count|parent|PID' /tmp/taxtrace-census/technical.txt | head -n 200 || true
