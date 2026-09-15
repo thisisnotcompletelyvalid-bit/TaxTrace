@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from apps.api.app.routers import (
+    census_taxonomy_v2,
     data_v2,
     explorer,
     explorer_v2,
@@ -45,6 +46,7 @@ app.include_router(search.router, prefix="/v1")
 app.include_router(warehouse.router, prefix="/v1")
 app.include_router(methodology.router, prefix="/v1")
 app.include_router(data_v2.router, prefix="/v2")
+app.include_router(census_taxonomy_v2.router, prefix="/v2")
 app.include_router(receipt_v2.router, prefix="/v2")
 app.include_router(explorer_v2.router, prefix="/v2")
 app.include_router(search_v2.router, prefix="/v2")
