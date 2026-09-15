@@ -1,7 +1,7 @@
 # TaxTrace methodology specification
 
-Methodology version: **1.3.0**  
-Status: governing specification for implemented phases 0–9A, Federal Product V2, and Federal Search V2
+Methodology version: **1.4.0**  
+Status: governing specification for implemented phases 0–9A, Federal Product V2, Federal Search V2, and Census additive expenditure taxonomy
 
 ## 1. Headline definition
 
@@ -200,6 +200,8 @@ The repository's generic reconciliation defaults are:
 
 These are operational defaults, not a statement that every source pair ought to match exactly. Specific V2 relationships can impose stricter semantic gates, such as refusing File C award attribution when the File C account total exceeds its File B denominator.
 
+For Census state/local finance, unit-level and aggregate-level controls are distinct grains. Government-level additive partitions conserve the literal government rows. Census aggregate public-use controls can contain aggregate-stage adjustments relative to the sum of individual-government records. Those adjustments remain aggregate reconciliation facts and are not redistributed to individual governments.
+
 ## 16. Monetary precision and rounding
 
 Money is represented with fixed-precision decimals. Float arithmetic is not used for tax liability or allocation mathematics.
@@ -239,7 +241,11 @@ Implemented invariants include:
 - partial-period federal bulk releases cannot silently stand in for full-year personalization;
 - File C/D1/D2/File F relationships require canonical identity control before enrichment;
 - File F cannot be counted beside its prime award as an additional federal expenditure;
-- Search V2 results are always non-additive.
+- Search V2 results are always non-additive;
+- Census raw finance rows remain non-additive unless admitted to an explicit year-versioned additive parent;
+- every native Census code admitted to the Direct General Expenditure parent maps to exactly one TaxTrace presentation category;
+- government-level Census partitions conserve their government-level source rows exactly;
+- Census aggregate-stage adjustments are never silently pushed back into individual governments.
 
 ## 20. Methodology change policy
 
@@ -324,7 +330,7 @@ Search therefore cannot enlarge or redistribute the user's receipt.
 
 All search results are discovery/navigation results and expose `additive = false`.
 
-Federal Search V2 changes discovery and ranking behavior but not the methodology-1.3.0 allocation semantics, so application 0.6.5 does not advance the methodology version.
+Federal Search V2 changes discovery and ranking behavior but not the methodology-1.3.0 federal allocation semantics, so application 0.6.5 did not advance the methodology version.
 
 ## 25. Florida, Alachua, Gainesville, and modeled sales tax (methodology 1.2.0)
 
@@ -424,8 +430,49 @@ The top-level Federal Receipt V2 must satisfy:
 
 Every File B account partition and File C account award projection must independently conserve its personalized parent at displayed-cent precision.
 
-## 27. State/local Warehouse V2 forward rule
+## 27. Census state/local additive expenditure taxonomy (methodology 1.4.0)
 
-The nationwide Census government and finance warehouse is implemented as a source-grain backbone, but raw Census item codes can contain components and rollups. They remain non-additive until an official defensible taxonomy identifies a complete mutually exclusive expenditure partition.
+Methodology 1.4.0 establishes the first nationwide state/local additive spending parent over the Census of Governments finance backbone.
 
-A future nationwide state/local receipt must not sum native Census finance rows directly. It must first establish that additive taxonomy, preserve transfers and enterprise distinctions, and then enforce the same parent-child conservation rules used by the federal receipt.
+Raw Census finance rows are still not globally additive. The supported parent is **Direct General Expenditure**, using the year-versioned combined State and Local Government Finances methodology. For the supported post-2022 code system, parent membership is a literal 72-code set. Membership is not inferred from an `E`/`F` prefix or a numeric function suffix.
+
+The combined state/local formula includes current and consolidated-capital fire-protection codes `E24` and `F24`. It excludes state-only `E54`/`F54`, environmental-health code 27, utilities 91–94, liquor-store code 90, obsolete G/K capital rows, discontinued welfare rows, transfers, and other nonmember native records. `I89` general-debt interest and `J19` education subsidies retain their special object semantics.
+
+TaxTrace presentation categories do not decide additive membership. The Census formula first admits a native code to the parent; only then is that admitted code mapped to exactly one presentation category. A machine audit fails the taxonomy if any admitted code is missing or multiply assigned.
+
+For one government `g`:
+
+`DGE_g = sum(c in official_parent_codes) amount(g,c)`.
+
+The TaxTrace child partition plus any explicit residual must satisfy:
+
+`sum(children_g) + residual_g = DGE_g`.
+
+Excluded native codes remain visible as exclusions and cannot contribute to the additive parent.
+
+### 27.1 Aggregate-control rule
+
+Census aggregate public-use tables are not assumed to be the literal arithmetic sum of every individual-government row. Census may apply aggregate-stage revisions or adjustments. TaxTrace therefore keeps these grains distinct:
+
+- individual-government rows control a government-level partition;
+- Census aggregate public-use controls control aggregate validation;
+- published aggregate tables are reconciled to the corresponding aggregate public-use controls;
+- an aggregate-stage adjustment is never allocated back to governments without an official government-level mapping.
+
+The 2022 live release gate validated:
+
+- individual-government Direct General Expenditure sum: `$4,081,976,281,000`;
+- `22statetypepu` national aggregate control: `$4,082,022,589,000`;
+- current `GS00LOCALFIN` national Direct General Expenditure control: `$4,082,022,589,000`;
+- aggregate public-use vs published control difference: `$0`;
+- aggregate-stage adjustment relative to literal individual rows: `+$46,308,000`.
+
+That adjustment is a reconciliation fact, not a pool of dollars to distribute across jurisdictions.
+
+### 27.2 Source-selection rule
+
+The combined State and Local Government Finances classification/manual is authoritative for the nationwide product. A static workbook under `programs-surveys/state` describes State Government Finances and must not be substituted for the combined state-and-local formula merely because a similarly named summary item exists.
+
+The dedicated live validation workflow downloads the current revised individual-unit archive and current `GS00LOCALFIN` release, imports the production taxonomy constants directly, and requires exact agreement between the revised national aggregate public-use control and `GS00LOCALFIN` for Direct General Expenditure and its current/capital/other components.
+
+See `docs/CENSUS_ADDITIVE_TAXONOMY.md` for the operational source and validation contract.

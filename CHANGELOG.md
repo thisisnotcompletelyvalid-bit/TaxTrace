@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.7.0 — 2026-09-14
+
+Completed the official Census additive expenditure taxonomy for the nationwide state/local Warehouse V2 backbone:
+
+- added a year-versioned Census state/local Direct General Expenditure parent and TaxTrace presentation partition for supported post-2022 finance data;
+- implemented the combined State and Local Government Finances post-2022 native-code formula as a literal 72-code set rather than inferring additive membership from code prefixes or suffixes;
+- included fire-protection current/capital codes `E24`/`F24` in the combined state/local parent and excluded state-only `E54`/`F54`, utilities, liquor-store activity, obsolete G/K capital rows, transfers, and other nonmember native rows;
+- preserved special native-code semantics for `I89` general-debt interest and `J19` education subsidies;
+- added machine audits proving every official parent code maps to exactly one TaxTrace presentation category;
+- added `GET /v2/data/census-taxonomy` and government-level Census expenditure partitioning with explicit excluded native codes, imputation flags, provenance, residuals, and exact conservation;
+- kept raw Census finance rows non-additive outside an explicitly constructed taxonomy partition;
+- added unit tests and API tests for formula membership, exclusions, duplicate row aggregation, unsupported-year refusal, source-release gating, and exact government-level conservation;
+- added an independent live Census validation workflow bound directly to the production taxonomy constants;
+- corrected an intermediate source-selection error discovered during validation: the static `programs-surveys/state` SF0176 workbook is State Government Finances methodology and is not the authoritative combined state-and-local formula for this product;
+- validated the combined state/local methodology against the current revised 2022 individual-unit file, the bundled `22statetypepu` national aggregate controls, and the current `GS00LOCALFIN` aggregate release.
+
+The live 2022 release gate now proves:
+
+- literal individual-government Direct General Expenditure sum: **$4,081,976,281,000**;
+- revised national aggregate public-use control: **$4,082,022,589,000**;
+- current `GS00LOCALFIN` Direct General Expenditure control: **$4,082,022,589,000**;
+- aggregate public-use vs published control difference: **$0**;
+- Census aggregate-stage adjustment relative to the literal individual-government rows: **+$46,308,000**.
+
+The $46.308 million adjustment is preserved as a Census aggregate-stage reconciliation fact. TaxTrace does not redistribute it across individual governments. Government-level partitions therefore conserve the government-level source rows exactly, while national aggregate validation uses Census's aggregate public-use control layer.
+
+Methodology advanced to **1.4.0** because this release establishes a new operational state/local additive-spending rule that will control subsequent nationwide personalized state/local receipts. Application version advanced to **0.7.0**. Census taxonomy revision is **1.2.0**.
+
 ## 0.6.5 — 2026-09-14
 
 Added Federal Search V2 over the validated Warehouse V2 award lake:
