@@ -24,6 +24,7 @@ DOWNLOAD_ENDPOINTS = {
 }
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
 REPORTING_AGENCIES_ENDPOINT = f"{API_ROOT}/reporting/agencies/overview/"
+ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
 SHARD_SUBMISSION_PACE_SECONDS = 0.25
 
 # USAspending can report `ready` before the generated object is retrievable from
@@ -54,24 +55,77 @@ class USASpendingDownloadJob:
 
 
 def _reporting_agencies_from_response(payload: dict) -> list[dict]:
-    """Normalize one reporting-overview page to unique, selectable top-tier agencies."""
+    """Normalize one reporting-overview page to agencies with a submission in that period."""
     by_abbreviation: dict[str, dict] = {}
     for agency in payload.get("results") or []:
+        # The reporting overview intentionally returns broader DABS agencies with null
+        # period-specific fields when they did not submit in the requested period.
+        # `recent_publication_date` is populated only when that period has a submission.
+        if not agency.get("recent_publication_date"):
+            continue
         abbreviation = str(agency.get("abbreviation") or "").strip().upper()
         if not abbreviation:
             raise RuntimeError(
-                "USAspending reporting overview returned an agency without an abbreviation"
+                "USAspending reporting overview returned a current-period agency "
+                "without an abbreviation"
+            )
+        toptier_code = str(agency.get("toptier_code") or "").strip()
+        if not toptier_code:
+            raise RuntimeError(
+                "USAspending reporting overview returned a current-period agency "
+                "without a toptier code"
             )
         by_abbreviation[abbreviation] = {
             "abbreviation": abbreviation,
-            "agency_id": agency.get("agency_id"),
-            "toptier_code": agency.get("toptier_code"),
+            "toptier_code": toptier_code,
             "name": agency.get("agency_name"),
         }
     return sorted(
         by_abbreviation.values(),
-        key=lambda agency: (str(agency.get("toptier_code") or ""), agency["abbreviation"]),
+        key=lambda agency: (agency["toptier_code"], agency["abbreviation"]),
     )
+
+
+def _account_agency_ids_from_response(payload: dict) -> dict[str, int]:
+    """Return {toptier_code: toptier_agency_id} from the bulk account-agency reference."""
+    raw_agencies = payload.get("agencies") or []
+    if isinstance(raw_agencies, dict):
+        agencies = [
+            *(raw_agencies.get("cfo_agencies") or []),
+            *(raw_agencies.get("other_agencies") or []),
+        ]
+    elif isinstance(raw_agencies, list):
+        agencies = raw_agencies
+    else:
+        raise RuntimeError("USAspending account-agency reference returned an invalid agencies shape")
+
+    by_code: dict[str, int] = {}
+    for agency in agencies:
+        toptier_code = str(agency.get("toptier_code") or "").strip()
+        raw_id = agency.get("toptier_agency_id")
+        if not toptier_code or raw_id is None:
+            raise RuntimeError(
+                "USAspending account-agency reference returned an agency without "
+                "toptier_code/toptier_agency_id"
+            )
+        try:
+            toptier_agency_id = int(raw_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"USAspending returned invalid toptier_agency_id {raw_id!r} "
+                f"for toptier code {toptier_code}"
+            ) from exc
+        prior = by_code.get(toptier_code)
+        if prior is not None and prior != toptier_agency_id:
+            raise RuntimeError(
+                f"USAspending returned conflicting toptier agency IDs for {toptier_code}: "
+                f"{prior} and {toptier_agency_id}"
+            )
+        by_code[toptier_code] = toptier_agency_id
+
+    if not by_code:
+        raise RuntimeError("USAspending returned no account agencies")
+    return by_code
 
 
 class USASpendingBulkClient:
@@ -93,13 +147,14 @@ class USASpendingBulkClient:
 
     Live FY2025 validation further proved that the all-agency File C `award_financial` component
     fails independently after roughly sixteen minutes of upstream generation. File C is therefore
-    transport-sharded across the agencies USAspending reports for the exact fiscal year and period,
-    using the agency abbreviations explicitly supported by the account-download API. File A/B remain
-    all-agency jobs. Shard submissions are lightly paced and transient HTTP/transport failures are
-    retried a bounded number of times. Every shard must still be accepted and later reach terminal
-    success. Completed official archives are streamed into one local ZIP before the existing
-    account-lake materializer sees them. This changes transport only, not source grain,
-    fiscal-period evidence, additivity, or release provenance.
+    transport-sharded across agencies with actual submissions for the exact fiscal year and period.
+    That reporting universe is strictly joined by `toptier_code` to USAspending's account-agency
+    reference, which supplies the numeric `toptier_agency_id` accepted by the account-download
+    filter. File A/B remain all-agency jobs. Shard submissions are lightly paced and transient
+    HTTP/transport failures are retried a bounded number of times. Every shard must still be
+    accepted and later reach terminal success. Completed official archives are streamed into one
+    local ZIP before the existing account-lake materializer sees them. This changes transport only,
+    not source grain, fiscal-period evidence, additivity, or release provenance.
     """
 
     def __init__(self, timeout: float | None = None):
@@ -139,7 +194,7 @@ class USASpendingBulkClient:
         raise last_error
 
     def reporting_agencies(self, fiscal_year: int, fiscal_period: int) -> list[dict]:
-        """Return agencies with submission data for the exact fiscal year and period."""
+        """Return agencies with an actual submission for the exact fiscal year and period."""
         agencies: dict[str, dict] = {}
         page = 1
         with httpx.Client(
@@ -174,12 +229,72 @@ class USASpendingBulkClient:
 
         if not agencies:
             raise RuntimeError(
-                f"USAspending returned no reporting agencies for FY{fiscal_year} P{fiscal_period}"
+                f"USAspending returned no current-period reporting agencies "
+                f"for FY{fiscal_year} P{fiscal_period}"
             )
         return sorted(
             agencies.values(),
-            key=lambda agency: (str(agency.get("toptier_code") or ""), agency["abbreviation"]),
+            key=lambda agency: (agency["toptier_code"], agency["abbreviation"]),
         )
+
+    def account_agency_ids(self) -> dict[str, int]:
+        """Return the official internal toptier agency IDs accepted by account downloads."""
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout, follow_redirects=True, headers=self.headers
+                ) as client:
+                    response = client.post(
+                        ACCOUNT_AGENCIES_ENDPOINT,
+                        json={"type": "account_agencies"},
+                    )
+                    response.raise_for_status()
+                    return _account_agency_ids_from_response(response.json())
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code
+                retriable = status_code == 429 or status_code >= 500
+                if not retriable or attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+        assert last_error is not None
+        raise last_error
+
+    def current_reporting_account_agencies(
+        self,
+        fiscal_year: int,
+        fiscal_period: int,
+    ) -> list[dict]:
+        """Join exact-period reporting agencies to valid account-download toptier IDs."""
+        reporting = self.reporting_agencies(fiscal_year, fiscal_period)
+        account_ids = self.account_agency_ids()
+        joined: list[dict] = []
+        missing: list[str] = []
+        for agency in reporting:
+            toptier_code = agency["toptier_code"]
+            toptier_agency_id = account_ids.get(toptier_code)
+            if toptier_agency_id is None:
+                missing.append(f"{toptier_code}:{agency['abbreviation']}")
+                continue
+            joined.append(
+                {
+                    **agency,
+                    "toptier_agency_id": toptier_agency_id,
+                }
+            )
+        if missing:
+            raise RuntimeError(
+                "USAspending current-period reporting agencies are missing from the "
+                "account-agency reference; refusing incomplete File C coverage: "
+                + ", ".join(sorted(missing))
+            )
+        return joined
 
     @staticmethod
     def _job_record(job: USASpendingDownloadJob) -> dict:
@@ -203,11 +318,11 @@ class USASpendingBulkClient:
         filters = payload.get("filters") or {}
         fiscal_year = int(filters["fy"])
         fiscal_period = self._fiscal_period(filters)
-        agencies = self.reporting_agencies(fiscal_year, fiscal_period)
+        agencies = self.current_reporting_account_agencies(fiscal_year, fiscal_period)
         split_jobs: list[dict] = []
         for index, agency in enumerate(agencies):
             shard_payload = json.loads(json.dumps(payload))
-            shard_payload["filters"]["agency"] = agency["abbreviation"]
+            shard_payload["filters"]["agency"] = str(agency["toptier_agency_id"])
             try:
                 shard = self._submit_one("accounts", shard_payload)
             except (httpx.HTTPError, RuntimeError) as exc:
@@ -215,7 +330,8 @@ class USASpendingBulkClient:
                 name = agency.get("name") or "unknown agency"
                 raise RuntimeError(
                     f"Failed to submit FY{fiscal_year} P{fiscal_period} File C shard "
-                    f"for {label} ({name}); refusing incomplete federal coverage"
+                    f"for {label} ({name}, toptier_agency_id={agency['toptier_agency_id']}); "
+                    "refusing incomplete federal coverage"
                 ) from exc
             split_jobs.append(self._job_record(shard))
             if len(agencies) > 5 and index < len(agencies) - 1:
@@ -229,7 +345,7 @@ class USASpendingBulkClient:
                 "status": "submitted",
                 "file_name": synthetic_name,
                 "file_url": f"taxtrace-split://{synthetic_name}",
-                "split_strategy": "file_c_by_reporting_agency",
+                "split_strategy": "file_c_by_current_reporting_toptier_agency_id",
                 "agency_count": len(agencies),
                 "split_jobs": split_jobs,
             },
@@ -244,9 +360,8 @@ class USASpendingBulkClient:
         agency = str(filters.get("agency") or "all").lower()
 
         # The full-year all-agency File C generator is independently unreliable upstream.
-        # The reporting overview supplies the agencies that actually submitted for this FY/period;
-        # abbreviations are valid account-download selectors and partition File C transport without
-        # changing the underlying accounting grain.
+        # The reporting overview establishes exact-period coverage; the account-agency reference
+        # supplies the numeric toptier_agency_id selector for each current reporting agency.
         if (
             kind == "accounts"
             and submission_types == ["award_financial"]
@@ -279,7 +394,9 @@ class USASpendingBulkClient:
                     "status": "submitted",
                     "file_name": synthetic_name,
                     "file_url": f"taxtrace-split://{synthetic_name}",
-                    "split_strategy": "submission_type_with_file_c_reporting_agency_shards",
+                    "split_strategy": (
+                        "submission_type_with_file_c_current_reporting_toptier_agency_id_shards"
+                    ),
                     "file_c_agency_count": file_c_agency_count,
                     "split_jobs": split_jobs,
                 },
