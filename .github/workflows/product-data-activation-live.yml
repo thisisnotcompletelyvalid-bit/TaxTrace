@@ -1,0 +1,115 @@
+name: Product Data Activation Live Validation
+
+on:
+  push:
+    branches:
+      - data-activation-v1
+    paths:
+      - '.github/workflows/product-data-activation-live.yml'
+      - 'src/taxtrace/warehouse_v2/product_activation.py'
+      - 'src/taxtrace/warehouse_v2/census.py'
+      - 'src/taxtrace/warehouse_v2/census_lake.py'
+      - 'apps/api/app/routers/product_data_v2.py'
+      - 'apps/web/app/governments/**'
+      - 'docker-compose.yml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/product-data-activation-live.yml'
+      - 'src/taxtrace/warehouse_v2/product_activation.py'
+      - 'src/taxtrace/warehouse_v2/census.py'
+      - 'src/taxtrace/warehouse_v2/census_lake.py'
+      - 'apps/api/app/routers/product_data_v2.py'
+      - 'apps/web/app/governments/**'
+      - 'docker-compose.yml'
+  workflow_dispatch:
+
+jobs:
+  activate-national-2022:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: taxtrace
+          POSTGRES_USER: taxtrace
+          POSTGRES_PASSWORD: taxtrace
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U taxtrace -d taxtrace"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://taxtrace:taxtrace@127.0.0.1:5432/taxtrace
+      RAW_DATA_DIR: /tmp/taxtrace-data/raw
+      WAREHOUSE_DATA_DIR: /tmp/taxtrace-data/warehouse
+      APP_ENV: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - run: alembic upgrade head
+      - name: Activate complete 2022 national Census product data
+        run: >-
+          python -m taxtrace.warehouse_v2.product_activation
+          --no-2024-sample
+          --skip-federal-core
+      - name: Verify deployment readiness and real government partition
+        run: |
+          python - <<'PY'
+          from decimal import Decimal
+
+          from sqlalchemy import func, select
+
+          from taxtrace.database import SessionLocal
+          from taxtrace.db_models import Jurisdiction
+          from taxtrace.enums import JurisdictionLevel
+          from taxtrace.warehouse_v2.census_partition import load_government_expenditure_partition
+          from taxtrace.warehouse_v2.db_models import GovernmentFinanceFact
+          from taxtrace.warehouse_v2.product_activation import product_data_readiness
+
+          with SessionLocal() as session:
+              status = product_data_readiness(session)
+              print(status.to_dict())
+              assert status.national_state_local_ready is True, status
+              assert status.government_registry.government_count >= 90_000, status
+              assert status.census_finance_2022.row_count >= 1_300_000, status
+              assert status.census_finance_2022.government_count >= 88_000, status
+              assert status.census_finance_2022.parquet_objects >= 1, status
+
+              candidates = session.execute(
+                  select(Jurisdiction.id, Jurisdiction.name, func.count(GovernmentFinanceFact.id))
+                  .join(GovernmentFinanceFact, GovernmentFinanceFact.jurisdiction_id == Jurisdiction.id)
+                  .where(
+                      Jurisdiction.name.ilike('%Gainesville%'),
+                      Jurisdiction.level == JurisdictionLevel.MUNICIPAL,
+                      GovernmentFinanceFact.fiscal_year == 2022,
+                  )
+                  .group_by(Jurisdiction.id, Jurisdiction.name)
+                  .order_by(func.count(GovernmentFinanceFact.id).desc())
+              ).all()
+              assert candidates, 'No Gainesville municipal government with 2022 finance facts was found'
+              government_id, name, fact_count = candidates[0]
+              result = load_government_expenditure_partition(
+                  session,
+                  jurisdiction_id=government_id,
+                  fiscal_year=2022,
+              )
+              assert result is not None, (government_id, name)
+              assert result.partition.parent_amount > Decimal('0'), result
+              assert result.partition.conservation_difference == Decimal('0.00'), result
+              print({
+                  'government_id': government_id,
+                  'government_name': name,
+                  'source_fact_count': fact_count,
+                  'direct_general_expenditure': str(result.partition.parent_amount),
+                  'taxonomy_version': result.partition.taxonomy_version,
+              })
+          PY
