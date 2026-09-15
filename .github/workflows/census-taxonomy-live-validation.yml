@@ -19,164 +19,55 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
-      - name: Download official 2022 Census finance files
+      - name: Download official 2022 Census finance archive
         run: |
           mkdir -p /tmp/taxtrace-census
           python - <<'PY'
           from pathlib import Path
           from taxtrace.warehouse_v2.download import stream_download
-
-          root = Path('/tmp/taxtrace-census')
           stream_download(
               'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip',
-              root / '2022_Individual_Unit_File.zip',
-              overwrite=True,
-          )
-          stream_download(
-              'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx',
-              root / '22slsstab1.xlsx',
+              Path('/tmp/taxtrace-census/2022_Individual_Unit_File.zip'),
               overwrite=True,
           )
           PY
-      - name: Trace aggregate gap
+      - name: Inspect parent-ID file and raw finance layout
         run: |
           python - <<'PY'
-          from collections import Counter, defaultdict
-          from decimal import Decimal
+          from collections import Counter
           from pathlib import Path
           from zipfile import ZipFile
 
-          from openpyxl import load_workbook
-
-          from taxtrace.warehouse_v2.census import iter_finance_records
-          from taxtrace.warehouse_v2.census_taxonomy import (
-              POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES,
-              taxonomy_audit,
-          )
-
-          root = Path('/tmp/taxtrace-census')
-          source = root / '2022_Individual_Unit_File.zip'
-          workbook_path = root / '22slsstab1.xlsx'
-
+          source = Path('/tmp/taxtrace-census/2022_Individual_Unit_File.zip')
           with ZipFile(source) as archive:
-              print('ARCHIVE_MEMBERS')
-              for member in archive.infolist():
-                  print('ARCHIVE_MEMBER', member.filename, member.file_size, member.compress_size)
+              members = {m.filename: m for m in archive.infolist()}
+              pid_name = next(name for name in members if name.endswith('Fin_PID_2022.txt'))
+              fin_name = next(name for name in members if 'FinEstDAT' in name)
+              state_type_name = next(name for name in members if name.endswith('22statetypepu.txt'))
 
-          all_totals = defaultdict(lambda: Decimal('0.00'))
-          type_totals = defaultdict(lambda: Decimal('0.00'))
-          code_type_totals = defaultdict(lambda: Decimal('0.00'))
-          key_counts = Counter()
-          key_amounts = defaultdict(lambda: Decimal('0.00'))
-          records = 0
-          governments = set()
-          code_counts = Counter()
-          for record in iter_finance_records(source):
-              records += 1
-              governments.add(record.government_id)
-              code = record.item_code.upper()
-              amount = record.amount_dollars
-              gov_type = record.government_id[2:3]
-              code_counts[code] += 1
-              all_totals[code] += amount
-              code_type_totals[(code, gov_type)] += amount
-              key = (record.government_id, code)
-              key_counts[key] += 1
-              key_amounts[key] += amount
-              if code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES:
-                  type_totals[gov_type] += amount
+              print('PID_MEMBER', pid_name, members[pid_name].file_size)
+              print('FINANCE_MEMBER', fin_name, members[fin_name].file_size)
+              print('STATE_TYPE_MEMBER', state_type_name, members[state_type_name].file_size)
 
-          duplicate_keys = {key: count for key, count in key_counts.items() if count > 1}
-          print('DUPLICATE_KEY_AUDIT', {
-              'duplicate_government_item_keys': len(duplicate_keys),
-              'duplicate_rows_beyond_first': sum(count - 1 for count in duplicate_keys.values()),
-              'max_multiplicity': max(duplicate_keys.values(), default=1),
-          })
-          for key, count in sorted(duplicate_keys.items(), key=lambda item: item[1], reverse=True)[:30]:
-              print('DUPLICATE_KEY_SAMPLE', key, count, key_amounts[key])
+              pid_lines = archive.read(pid_name).decode('utf-8-sig', errors='replace').splitlines()
+              fin_lines = archive.read(fin_name).decode('utf-8-sig', errors='replace').splitlines()
+              state_lines = archive.read(state_type_name).decode('utf-8-sig', errors='replace').splitlines()
 
-          totals = {
-              code: all_totals[code]
-              for code in sorted(POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES)
-              if code_counts[code]
-          }
-          direct_general = sum(totals.values(), Decimal('0.00'))
-          audit = taxonomy_audit(2022)
-          assert audit['valid'], audit
-          assert records >= 1_000_000, records
-          assert len(governments) >= 50_000, len(governments)
+              print('PID_LINE_COUNT', len(pid_lines))
+              print('PID_FIRST_LINES')
+              for index, line in enumerate(pid_lines[:60], start=1):
+                  print('PID_LINE', index, len(line), repr(line))
 
-          current_total = sum(
-              (amount for code, amount in totals.items() if code.startswith('E')),
-              Decimal('0.00'),
-          )
-          capital_total = sum(
-              (amount for code, amount in totals.items() if code.startswith('F')),
-              Decimal('0.00'),
-          )
-          interest_total = totals.get('I89', Decimal('0.00'))
-          assistance_total = totals.get('J19', Decimal('0.00'))
+              print('FINANCE_FIRST_LINES')
+              for index, line in enumerate(fin_lines[:15], start=1):
+                  print('FIN_LINE', index, len(line), repr(line))
 
-          print('TAXTRACE_AGGREGATE', {
-              'records': records,
-              'governments': len(governments),
-              'direct_general_dollars': str(direct_general),
-              'active_codes_present': len(totals),
-              'active_codes_missing': sorted(code for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES if not code_counts[code]),
-              'e27_rows': code_counts['E27'],
-              'f27_rows': code_counts['F27'],
-              'e27_dollars': str(all_totals['E27']),
-              'f27_dollars': str(all_totals['F27']),
-          })
-          print('TAXTRACE_COMPONENTS', {
-              'current_operations': str(current_total),
-              'capital': str(capital_total),
-              'interest_general_debt': str(interest_total),
-              'education_assistance': str(assistance_total),
-              'sum': str(current_total + capital_total + interest_total + assistance_total),
-          })
-          print('DIRECT_GENERAL_BY_GOV_TYPE')
-          for gov_type in sorted(type_totals):
-              print('GOV_TYPE_TOTAL', gov_type, type_totals[gov_type])
-          print('E12_F12_BY_GOV_TYPE')
-          for gov_type in sorted({key[1] for key in code_type_totals if key[0] in {'E12', 'F12'}}):
-              amount = code_type_totals[('E12', gov_type)] + code_type_totals[('F12', gov_type)]
-              print('E12_F12_GOV_TYPE', gov_type, amount)
+              print('STATE_TYPE_FIRST_LINES')
+              for index, line in enumerate(state_lines[:30], start=1):
+                  print('STATE_LINE', index, len(line), repr(line))
 
-          workbook = load_workbook(workbook_path, read_only=True, data_only=True)
-          sheet = workbook[workbook.sheetnames[0]]
-          rows = {row_index: list(row) for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1)}
-          for row_index in range(82, 101):
-              print('WORKBOOK_ROW', row_index, rows[row_index][:20])
-
-          direct_row = rows[91]
-          published_dollars = Decimal(str(direct_row[2])) * Decimal('1000')
-          difference = direct_general - published_dollars
-          print('RECONCILIATION', {
-              'taxtrace_dollars': str(direct_general),
-              'published_dollars': str(published_dollars),
-              'difference_dollars': str(difference),
-              'relative_difference': str(difference / published_dollars),
-          })
-          published_state = Decimal(str(direct_row[4])) * Decimal('1000')
-          published_local = Decimal(str(direct_row[5])) * Decimal('1000')
-          raw_state = type_totals['0']
-          raw_local = sum((value for key, value in type_totals.items() if key != '0'), Decimal('0.00'))
-          print('STATE_LOCAL_RECONCILIATION', {
-              'raw_state': str(raw_state),
-              'published_state': str(published_state),
-              'state_difference': str(raw_state - published_state),
-              'raw_local': str(raw_local),
-              'published_local': str(published_local),
-              'local_difference': str(raw_local - published_local),
-          })
-
-          print('CANDIDATE_SPECIAL_CODES', {
-              'E24': str(all_totals['E24']),
-              'F24': str(all_totals['F24']),
-              'E27': str(all_totals['E27']),
-              'F27': str(all_totals['F27']),
-              'I89': str(all_totals['I89']),
-              'J19': str(all_totals['J19']),
-          })
+              pid_lengths = Counter(map(len, pid_lines))
+              pid_prefixes = Counter(line[:2] for line in pid_lines if line)
+              print('PID_LENGTHS', pid_lengths.most_common(20))
+              print('PID_PREFIXES', pid_prefixes.most_common(20))
           PY
