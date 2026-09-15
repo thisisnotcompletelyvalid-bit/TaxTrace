@@ -169,6 +169,47 @@ def test_submit_retries_transient_server_errors(monkeypatch: pytest.MonkeyPatch)
     assert job.file_name == "accounts.zip"
 
 
+def test_submit_retries_transient_transport_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("POST", "https://api.usaspending.gov/api/v2/download/accounts/")
+    outcomes: list[object] = [
+        httpx.RemoteProtocolError("Server disconnected without sending a response", request=request),
+        httpx.ConnectError("temporary connect failure", request=request),
+        httpx.Response(
+            200,
+            request=request,
+            json={"file_name": "accounts.zip", "file_url": "https://files/accounts.zip"},
+        ),
+    ]
+    calls = 0
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def post(self, _url: str, json: dict):
+            nonlocal calls
+            calls += 1
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(bulk_module.httpx, "Client", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda _seconds: None)
+
+    client = USASpendingBulkClient(timeout=1)
+    job = client._submit_one(
+        "accounts",
+        {"filters": {"fy": "2025", "submission_types": ["award_financial"]}},
+    )
+
+    assert calls == 3
+    assert job.file_name == "accounts.zip"
+
+
 def test_submit_does_not_retry_nontransient_client_error(monkeypatch: pytest.MonkeyPatch) -> None:
     request = httpx.Request("POST", "https://api.usaspending.gov/api/v2/download/accounts/")
     calls = 0
