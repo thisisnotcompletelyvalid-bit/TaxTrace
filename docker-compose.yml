@@ -15,13 +15,35 @@ services:
       timeout: 5s
       retries: 20
 
+  data-init:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      DATABASE_URL: postgresql+psycopg://taxtrace:taxtrace@db:5432/taxtrace
+      APP_ENV: production
+      RAW_DATA_DIR: /app/data/raw
+      WAREHOUSE_DATA_DIR: /app/data/warehouse
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && python -m taxtrace.warehouse_v2.product_activation"
+      ]
+
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
     environment:
       DATABASE_URL: postgresql+psycopg://taxtrace:taxtrace@db:5432/taxtrace
-      APP_ENV: development
+      APP_ENV: production
       RAW_DATA_DIR: /app/data/raw
       WAREHOUSE_DATA_DIR: /app/data/warehouse
     volumes:
@@ -31,6 +53,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      data-init:
+        condition: service_completed_successfully
     command: ["sh", "-c", "alembic upgrade head && uvicorn apps.api.app.main:app --host 0.0.0.0 --port 8000"]
 
   web:
