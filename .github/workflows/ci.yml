@@ -181,6 +181,28 @@ jobs:
               for account in award_body["accounts"]
           ), award_body
 
+          search_v2 = httpx.get(
+              f"{base}/v2/search/federal",
+              params={"q": "Acme", "fiscal_year": 2025, "limit": 20},
+          )
+          search_v2.raise_for_status()
+          search_v2_body = search_v2.json()
+          assert search_v2_body["results"] == [], search_v2_body
+          assert search_v2_body["receipt_context"] is False, search_v2_body
+          assert search_v2_body["personalization_status"] == "NOT_REQUESTED", search_v2_body
+          assert search_v2_body["prime_coverage"]["status"] in {"NO_FULL_YEAR_RELEASE", "OBJECTS_NOT_LOCAL"}, search_v2_body
+          assert search_v2_body["subaward_coverage"]["status"] in {"NO_FULL_YEAR_RELEASE", "OBJECTS_NOT_LOCAL"}, search_v2_body
+
+          search_v2_receipt = httpx.post(
+              f"{base}/v2/search/federal",
+              json={**request, "q": "Acme", "limit": 20, "entity_types": []},
+          )
+          search_v2_receipt.raise_for_status()
+          search_v2_receipt_body = search_v2_receipt.json()
+          assert search_v2_receipt_body["results"] == [], search_v2_receipt_body
+          assert search_v2_receipt_body["receipt_context"] is True, search_v2_receipt_body
+          assert search_v2_receipt_body["personalization_status"] == "UNAVAILABLE", search_v2_receipt_body
+
           local = httpx.post(
               f"{base}/v1/receipt/florida-gainesville",
               json={**request, "household_size": 1},
@@ -249,6 +271,7 @@ jobs:
             exit 1
           fi
           curl -fsS http://127.0.0.1:3000/florida | grep -q "Florida and Gainesville"
+          curl -fsS http://127.0.0.1:3000/search | grep -q "Federal Search V2"
           curl -fsS http://127.0.0.1:3000/api/health | grep -q '"status":"ok"'
           python - <<'PY'
           import httpx
