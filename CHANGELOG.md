@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.6.5 — 2026-09-14
+
+Added Federal Search V2 over the validated Warehouse V2 award lake:
+
+- added direct DuckDB/Parquet search over full-year USAspending D1/D2 prime transactions and File F subawards instead of copying award-scale rows into the legacy relational search index;
+- collapsed repeated D1/D2 transaction rows to the canonical prime-award identity before returning prime-award search results;
+- added recipient search grouped over distinct canonical prime-award identities;
+- added File F subaward/subrecipient search while preserving File F as downstream, non-additive context;
+- required an exact READY full-fiscal-year `FY{year}` award release for annual V2 search coverage; bounded validation slices do not masquerade as annual search data;
+- added public `GET /v2/search/federal` and receipt-aware `POST /v2/search/federal` endpoints;
+- allowed receipt-aware search to annotate prime awards and recipients only from the existing conserved File C personalized award projection;
+- explicitly prevented File F subawards from receiving personalized amounts; a subaward may show its prime award's personalized amount only as labeled navigation context;
+- added graceful coverage states when full-year release metadata or local Parquet objects are unavailable;
+- added a dedicated `/search` Next.js surface with public-data and optional receipt-context modes plus canonical award-detail navigation;
+- linked Federal Search V2 from the global website navigation;
+- added regression tests for D1/D2 identity collapse, recipient grouping, full-year release gating, File F non-additivity, receipt-context reuse of File C amounts, and API fallback behavior;
+- expanded no-Docker CI to smoke both V2 search routes and the `/search` production page.
+
+Methodology remains **1.3.0**. Search V2 changes discovery, ranking, and navigation, not the tax calculation or personalized allocation rules. Prime-award and recipient receipt annotations reuse already-conserved File C allocations. D1/D2 and File F monetary fields never create additional personalized dollars, and every search result remains non-additive.
+
 ## 0.6.0 — 2026-09-14
 
 Completed the first Federal Product V2 release over Warehouse V2:
