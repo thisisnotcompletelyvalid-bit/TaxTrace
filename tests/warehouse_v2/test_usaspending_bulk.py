@@ -11,6 +11,7 @@ import taxtrace.warehouse_v2.usaspending_bulk as bulk_module
 from taxtrace.warehouse_v2.usaspending_bulk import (
     USASpendingBulkClient,
     USASpendingDownloadJob,
+    _account_agencies_from_response,
 )
 
 
@@ -40,6 +41,13 @@ def _multi_type_payload() -> dict:
             ],
         },
     }
+
+
+def _agencies() -> list[dict]:
+    return [
+        {"toptier_agency_id": "10", "toptier_code": "001", "name": "Agency One"},
+        {"toptier_agency_id": "20", "toptier_code": "002", "name": "Agency Two"},
+    ]
 
 
 def test_wait_treats_ready_as_intermediate(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,51 +91,122 @@ def test_download_completed_rejects_ready_state(tmp_path: Path) -> None:
         )
 
 
-def test_account_submit_splits_multiple_submission_types(
+def test_account_agency_response_is_deduplicated_and_sorted() -> None:
+    result = _account_agencies_from_response(
+        {
+            "agencies": {
+                "cfo_agencies": [
+                    {"toptier_agency_id": 20, "toptier_code": "002", "name": "Agency Two"},
+                    {"toptier_agency_id": 10, "toptier_code": "001", "name": "Agency One"},
+                ],
+                "other_agencies": [
+                    {"toptier_agency_id": 20, "toptier_code": "002", "name": "Agency Two"},
+                    {"name": "Missing Identifier"},
+                ],
+            }
+        }
+    )
+
+    assert result == _agencies()
+
+
+def test_file_c_all_agency_request_shards_by_dabs_agency(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
     submitted: list[dict] = []
+    monkeypatch.setattr(client, "account_agencies", _agencies)
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
         submitted.append(payload)
-        submission_type = payload["filters"]["submission_types"][0]
+        agency = payload["filters"]["agency"]
         return USASpendingDownloadJob(
             kind=kind,
             request=payload,
             response={
-                "file_name": f"{submission_type}.zip",
-                "file_url": f"https://files.usaspending.gov/{submission_type}.zip",
+                "file_name": f"file_c_{agency}.zip",
+                "file_url": f"https://files.usaspending.gov/file_c_{agency}.zip",
             },
         )
 
     monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    payload = _multi_type_payload()
+    payload["filters"]["submission_types"] = ["award_financial"]
 
-    job = client.submit("accounts", _multi_type_payload())
+    job = client.submit("accounts", payload)
 
-    assert job.file_name == "FY2025P12_TaxTrace_Split_AccountData.zip"
-    assert job.direct_url == "taxtrace-split://FY2025P12_TaxTrace_Split_AccountData.zip"
-    assert [
-        payload["filters"]["submission_types"] for payload in submitted
-    ] == [
-        ["account_balances"],
-        ["object_class_program_activity"],
-        ["award_financial"],
-    ]
-    assert len(job.response["split_jobs"]) == 3
+    assert job.file_name == "FY2025P12_TaxTrace_AgencySharded_FileC.zip"
+    assert job.response["split_strategy"] == "file_c_by_dabs_toptier_agency"
+    assert job.response["agency_count"] == 2
+    assert [item["filters"]["agency"] for item in submitted] == ["10", "20"]
+    assert all(item["filters"]["submission_types"] == ["award_financial"] for item in submitted)
+    assert payload["filters"]["agency"] == "all"
+    assert len(job.response["split_jobs"]) == 2
 
 
-def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_account_submit_splits_a_b_and_flattens_file_c_agency_shards(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = USASpendingBulkClient(timeout=1)
+    submitted: list[dict] = []
+    monkeypatch.setattr(client, "account_agencies", _agencies)
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
+        submitted.append(payload)
         submission_type = payload["filters"]["submission_types"][0]
+        agency = payload["filters"].get("agency", "all")
         return USASpendingDownloadJob(
             kind=kind,
             request=payload,
             response={
-                "file_name": f"{submission_type}.zip",
-                "file_url": f"https://files.usaspending.gov/{submission_type}.zip",
+                "file_name": f"{submission_type}_{agency}.zip",
+                "file_url": f"https://files.usaspending.gov/{submission_type}_{agency}.zip",
+            },
+        )
+
+    monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    original_payload = _multi_type_payload()
+
+    job = client.submit("accounts", original_payload)
+
+    assert job.file_name == "FY2025P12_TaxTrace_Split_AccountData.zip"
+    assert job.direct_url == "taxtrace-split://FY2025P12_TaxTrace_Split_AccountData.zip"
+    assert job.response["split_strategy"] == "submission_type_with_file_c_dabs_agency_shards"
+    assert job.response["file_c_agency_count"] == 2
+    assert len(job.response["split_jobs"]) == 4
+    assert [
+        (
+            payload["filters"]["submission_types"][0],
+            payload["filters"].get("agency", "all"),
+        )
+        for payload in submitted
+    ] == [
+        ("account_balances", "all"),
+        ("object_class_program_activity", "all"),
+        ("award_financial", "10"),
+        ("award_financial", "20"),
+    ]
+    assert original_payload["filters"]["agency"] == "all"
+    assert original_payload["filters"]["submission_types"] == [
+        "account_balances",
+        "object_class_program_activity",
+        "award_financial",
+    ]
+
+
+def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    monkeypatch.setattr(client, "account_agencies", _agencies)
+
+    def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
+        submission_type = payload["filters"]["submission_types"][0]
+        agency = payload["filters"].get("agency", "all")
+        return USASpendingDownloadJob(
+            kind=kind,
+            request=payload,
+            response={
+                "file_name": f"{submission_type}_{agency}.zip",
+                "file_url": f"https://files.usaspending.gov/{submission_type}_{agency}.zip",
             },
         )
 
@@ -150,7 +229,7 @@ def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert result["status"] == "finished"
-    assert len(result["split_responses"]) == 3
+    assert len(result["split_responses"]) == 4
     assert all(item["status"] == "finished" for item in result["split_responses"])
 
 
