@@ -61,6 +61,7 @@ jobs:
           python -m taxtrace.warehouse_v2.product_activation
           --no-2024-sample
           --skip-federal-core
+          --skip-federal-accounts
       - name: Verify deployment readiness and real government partition
         run: |
           python - <<'PY'
