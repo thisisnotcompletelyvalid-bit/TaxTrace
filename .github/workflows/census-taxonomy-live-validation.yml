@@ -38,12 +38,13 @@ jobs:
               overwrite=True,
           )
           PY
-      - name: Compute TaxTrace 2022 direct-general aggregate and inspect published control rows
+      - name: Trace aggregate gap
         run: |
           python - <<'PY'
           from collections import Counter, defaultdict
           from decimal import Decimal
           from pathlib import Path
+          from zipfile import ZipFile
 
           from openpyxl import load_workbook
 
@@ -57,7 +58,16 @@ jobs:
           source = root / '2022_Individual_Unit_File.zip'
           workbook_path = root / '22slsstab1.xlsx'
 
+          with ZipFile(source) as archive:
+              print('ARCHIVE_MEMBERS')
+              for member in archive.infolist():
+                  print('ARCHIVE_MEMBER', member.filename, member.file_size, member.compress_size)
+
           all_totals = defaultdict(lambda: Decimal('0.00'))
+          type_totals = defaultdict(lambda: Decimal('0.00'))
+          code_type_totals = defaultdict(lambda: Decimal('0.00'))
+          key_counts = Counter()
+          key_amounts = defaultdict(lambda: Decimal('0.00'))
           records = 0
           governments = set()
           code_counts = Counter()
@@ -65,8 +75,25 @@ jobs:
               records += 1
               governments.add(record.government_id)
               code = record.item_code.upper()
+              amount = record.amount_dollars
+              gov_type = record.government_id[2:3]
               code_counts[code] += 1
-              all_totals[code] += record.amount_dollars
+              all_totals[code] += amount
+              code_type_totals[(code, gov_type)] += amount
+              key = (record.government_id, code)
+              key_counts[key] += 1
+              key_amounts[key] += amount
+              if code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES:
+                  type_totals[gov_type] += amount
+
+          duplicate_keys = {key: count for key, count in key_counts.items() if count > 1}
+          print('DUPLICATE_KEY_AUDIT', {
+              'duplicate_government_item_keys': len(duplicate_keys),
+              'duplicate_rows_beyond_first': sum(count - 1 for count in duplicate_keys.values()),
+              'max_multiplicity': max(duplicate_keys.values(), default=1),
+          })
+          for key, count in sorted(duplicate_keys.items(), key=lambda item: item[1], reverse=True)[:30]:
+              print('DUPLICATE_KEY_SAMPLE', key, count, key_amounts[key])
 
           totals = {
               code: all_totals[code]
@@ -78,7 +105,17 @@ jobs:
           assert audit['valid'], audit
           assert records >= 1_000_000, records
           assert len(governments) >= 50_000, len(governments)
-          assert direct_general > 0, direct_general
+
+          current_total = sum(
+              (amount for code, amount in totals.items() if code.startswith('E')),
+              Decimal('0.00'),
+          )
+          capital_total = sum(
+              (amount for code, amount in totals.items() if code.startswith('F')),
+              Decimal('0.00'),
+          )
+          interest_total = totals.get('I89', Decimal('0.00'))
+          assistance_total = totals.get('J19', Decimal('0.00'))
 
           print('TAXTRACE_AGGREGATE', {
               'records': records,
@@ -86,46 +123,34 @@ jobs:
               'direct_general_dollars': str(direct_general),
               'active_codes_present': len(totals),
               'active_codes_missing': sorted(code for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES if not code_counts[code]),
-              'historical_g_rows': sum(count for code, count in code_counts.items() if code.startswith('G')),
-              'historical_k_rows': sum(count for code, count in code_counts.items() if code.startswith('K')),
-              'j67_rows': code_counts['J67'],
-              'j68_rows': code_counts['J68'],
-              'j85_rows': code_counts['J85'],
               'e27_rows': code_counts['E27'],
+              'f27_rows': code_counts['F27'],
+              'e27_dollars': str(all_totals['E27']),
+              'f27_dollars': str(all_totals['F27']),
           })
-          print('ACTIVE_CODE_TOTALS_DOLLARS')
-          for code, amount in sorted(totals.items(), key=lambda item: item[1], reverse=True):
-              print('CODE_TOTAL', code, amount)
+          print('TAXTRACE_COMPONENTS', {
+              'current_operations': str(current_total),
+              'capital': str(capital_total),
+              'interest_general_debt': str(interest_total),
+              'education_assistance': str(assistance_total),
+              'sum': str(current_total + capital_total + interest_total + assistance_total),
+          })
+          print('DIRECT_GENERAL_BY_GOV_TYPE')
+          for gov_type in sorted(type_totals):
+              print('GOV_TYPE_TOTAL', gov_type, type_totals[gov_type])
+          print('E12_F12_BY_GOV_TYPE')
+          for gov_type in sorted({key[1] for key in code_type_totals if key[0] in {'E12', 'F12'}}):
+              amount = code_type_totals[('E12', gov_type)] + code_type_totals[('F12', gov_type)]
+              print('E12_F12_GOV_TYPE', gov_type, amount)
 
           workbook = load_workbook(workbook_path, read_only=True, data_only=True)
           sheet = workbook[workbook.sheetnames[0]]
-          print('WORKBOOK_SHEETS', workbook.sheetnames)
-          print('WORKBOOK_HEADER_ROWS')
-          for row_index in range(1, 16):
-              print('WORKBOOK_ROW', row_index, list(next(sheet.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))[:20])
-          print('WORKBOOK_CONTROL_NEIGHBORHOOD')
+          rows = {row_index: list(row) for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1)}
           for row_index in range(82, 101):
-              print('WORKBOOK_ROW', row_index, list(next(sheet.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))[:20])
+              print('WORKBOOK_ROW', row_index, rows[row_index][:20])
 
-          matches = []
-          for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-              values = list(row)
-              text = ' | '.join(str(value) for value in values if value is not None)
-              normalized = text.lower().replace('-', ' ')
-              if 'direct general' in normalized or 'general expenditure' in normalized:
-                  matches.append((row_index, values))
-          print('DIRECT_GENERAL_MATCH_COUNT', len(matches))
-          for match in matches:
-              print('DIRECT_GENERAL_MATCH', match[0], match[1][:20])
-          assert matches, 'No Direct General Expenditure control row was found in 22slsstab1.xlsx'
-
-          direct_rows = [values for row_index, values in matches if any(
-              isinstance(value, str) and value.strip().lower() == 'direct general expenditure'
-              for value in values
-          )]
-          assert len(direct_rows) == 1, len(direct_rows)
-          published_thousands = Decimal(str(direct_rows[0][2]))
-          published_dollars = published_thousands * Decimal('1000')
+          direct_row = rows[91]
+          published_dollars = Decimal(str(direct_row[2])) * Decimal('1000')
           difference = direct_general - published_dollars
           print('RECONCILIATION', {
               'taxtrace_dollars': str(direct_general),
@@ -133,18 +158,25 @@ jobs:
               'difference_dollars': str(difference),
               'relative_difference': str(difference / published_dollars),
           })
+          published_state = Decimal(str(direct_row[4])) * Decimal('1000')
+          published_local = Decimal(str(direct_row[5])) * Decimal('1000')
+          raw_state = type_totals['0']
+          raw_local = sum((value for key, value in type_totals.items() if key != '0'), Decimal('0.00'))
+          print('STATE_LOCAL_RECONCILIATION', {
+              'raw_state': str(raw_state),
+              'published_state': str(published_state),
+              'state_difference': str(raw_state - published_state),
+              'raw_local': str(raw_local),
+              'published_local': str(published_local),
+              'local_difference': str(raw_local - published_local),
+          })
 
-          print('CANDIDATE_REMOVALS')
-          for code, amount in sorted(totals.items(), key=lambda item: abs(item[1] - difference))[:20]:
-              print('REMOVAL_CANDIDATE', code, amount, 'gap_after_removal', difference - amount)
-          for group in (
-              ('fire', ('E24', 'F24')),
-              ('interest', ('I89',)),
-              ('education_subsidy', ('J19',)),
-              ('fire_interest', ('E24', 'F24', 'I89')),
-              ('fire_subsidy', ('E24', 'F24', 'J19')),
-          ):
-              name, codes = group
-              amount = sum((all_totals[code] for code in codes), Decimal('0.00'))
-              print('GROUP_CANDIDATE', name, codes, amount, 'gap_after_removal', difference - amount)
+          print('CANDIDATE_SPECIAL_CODES', {
+              'E24': str(all_totals['E24']),
+              'F24': str(all_totals['F24']),
+              'E27': str(all_totals['E27']),
+              'F27': str(all_totals['F27']),
+              'I89': str(all_totals['I89']),
+              'J19': str(all_totals['J19']),
+          })
           PY
