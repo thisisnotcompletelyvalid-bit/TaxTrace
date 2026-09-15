@@ -2,13 +2,14 @@ name: USAspending Live Archive Validation
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/usaspending-archive-diagnostic.yml'
 
 jobs:
-  validate-live-account-archive:
+  validate-federal-account-file-c:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    env:
-      DATABASE_URL: sqlite:///./usaspending-live-validation.db
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,70 +17,53 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
-      - run: alembic upgrade head
-      - name: Request, download, and materialize real USAspending A/B/C data
+      - name: Generate real FY2025 P12 all-agency File C at federal-account grain
         run: |
           python - <<'PY'
           from pathlib import Path
+          from zipfile import ZipFile
 
-          from taxtrace.database import SessionLocal
-          from taxtrace.warehouse_v2.catalog import seed_catalog
-          from taxtrace.warehouse_v2.lake import LakeStore
           from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
-          from taxtrace.warehouse_v2.usaspending_lake import (
-              inspect_account_archive,
-              materialize_account_archive,
-          )
+          from taxtrace.warehouse_v2.usaspending_lake import inspect_account_archive
 
-          # Budget function 250 (General Science, Space, and Technology) is a
-          # compact slice with both account data and real contract/assistance
-          # awards, so this gate exercises populated File A, B, and C data.
           payload = {
-              "account_level": "treasury_account",
+              "account_level": "federal_account",
               "file_format": "csv",
               "filters": {
                   "agency": "all",
-                  "fy": "2022",
-                  "budget_function": "250",
+                  "fy": "2025",
                   "period": "12",
-                  "submission_types": [
-                      "account_balances",
-                      "object_class_program_activity",
-                      "award_financial",
-                  ],
+                  "submission_types": ["award_financial"],
               },
           }
 
+          # Call _submit_one deliberately so this diagnostic probes the native
+          # USAspending request shape without TaxTrace's File C transport sharding.
           client = USASpendingBulkClient(timeout=90)
-          job = client.submit("accounts", payload)
-          completed = client.wait(job, poll_seconds=2, max_polls=240)
+          job = client._submit_one("accounts", payload)
+          print("submitted", job.response)
+          completed = client.wait(job, poll_seconds=5, max_polls=360)
+          print("completed", completed)
           assert completed.get("status") == "finished", completed
 
-          destination = Path("data/raw/usaspending/live-validation") / (job.file_name or "accounts.zip")
+          destination = Path("data/raw/usaspending/fa-file-c-probe") / (job.file_name or "file-c.zip")
           downloaded = client.download_completed(completed, destination)
           assert downloaded.exists() and downloaded.stat().st_size > 0
 
           inspected = inspect_account_archive(downloaded)
-          submission_types = {member.submission_type for member in inspected}
-          print("members", [(member.member_name, member.submission_type, len(member.columns)) for member in inspected])
-          assert submission_types == {"A", "B", "C"}, submission_types
+          print(
+              "members",
+              [(member.member_name, member.submission_type, len(member.columns)) for member in inspected],
+          )
+          assert inspected
+          assert {member.submission_type for member in inspected} == {"C"}
 
-          with SessionLocal() as session:
-              seed_catalog(session)
-              result = materialize_account_archive(
-                  session,
-                  downloaded,
-                  fiscal_year=2022,
-                  request=payload,
-              )
-
-          print(result)
-          files = result["submission_files"]
-          assert set(files) == {"A", "B", "C"}
-          for submission_type in ("A", "B", "C"):
-              assert files[submission_type]["rows"] > 0, files[submission_type]
-              assert files[submission_type]["parquet_objects"], files[submission_type]
-              for object_key in files[submission_type]["parquet_objects"]:
-                  path = LakeStore().root / object_key
-                  assert path.exists() and path.stat().st_size > 0, path
+          total_uncompressed = 0
+          with ZipFile(downloaded) as archive:
+              for member in archive.infolist():
+                  if not member.is_dir():
+                      total_uncompressed += member.file_size
+          print("archive_bytes", downloaded.stat().st_size)
+          print("uncompressed_bytes", total_uncompressed)
+          print("source_grain", "federal_account_award")
           PY
