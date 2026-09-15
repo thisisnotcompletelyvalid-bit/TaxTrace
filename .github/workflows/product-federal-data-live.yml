@@ -8,6 +8,7 @@ on:
       - '.github/workflows/product-federal-data-live.yml'
       - 'src/taxtrace/cli.py'
       - 'src/taxtrace/warehouse_v2/cli.py'
+      - 'src/taxtrace/finance/sources/treasury.py'
       - 'src/taxtrace/warehouse_v2/product_activation.py'
       - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
@@ -19,6 +20,7 @@ on:
       - '.github/workflows/product-federal-data-live.yml'
       - 'src/taxtrace/cli.py'
       - 'src/taxtrace/warehouse_v2/cli.py'
+      - 'src/taxtrace/finance/sources/treasury.py'
       - 'src/taxtrace/warehouse_v2/product_activation.py'
       - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
@@ -56,6 +58,43 @@ jobs:
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
       - run: alembic upgrade head
+      - name: Inspect current Treasury workbook layout
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          import pandas as pd
+
+          from taxtrace.finance.sources.base import HttpFetcher
+          from taxtrace.finance.sources.treasury import TreasuryCombinedStatementSource
+
+          root = Path('/tmp/treasury-diagnostic')
+          root.mkdir(parents=True, exist_ok=True)
+          fetcher = HttpFetcher()
+          for kind, url in TreasuryCombinedStatementSource.urls(2025).items():
+              path = root / f'{kind}.xlsx'
+              path.write_bytes(fetcher.get_bytes(url))
+              print('TREASURY_WORKBOOK', kind, url, path.stat().st_size)
+              sheets = pd.read_excel(path, sheet_name=None, header=None, dtype=object)
+              for sheet_name, frame in sheets.items():
+                  print('TREASURY_SHEET', kind, sheet_name, frame.shape)
+                  nonempty_rows = 0
+                  for row_index, row in frame.head(50).iterrows():
+                      values = [str(value).strip() for value in row.tolist() if pd.notna(value) and str(value).strip()]
+                      if values:
+                          print('TREASURY_HEADER_ROW', kind, sheet_name, int(row_index) + 1, values[:12])
+                          nonempty_rows += 1
+                          if nonempty_rows >= 15:
+                              break
+                  for row_index, row in frame.iterrows():
+                      for col_index, value in enumerate(row.tolist()):
+                          if pd.isna(value):
+                              continue
+                          text = str(value).strip()
+                          if re.search(r'\b(million|thousand|dollar|unit|amount)s?\b', text, re.I):
+                              print('TREASURY_UNIT_TEXT', kind, sheet_name, int(row_index) + 1, col_index + 1, repr(text))
+          PY
       - name: Seed federal methodology and ingest current real federal controls
         run: |
           taxtrace warehouse seed
