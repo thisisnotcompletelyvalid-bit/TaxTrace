@@ -9,6 +9,7 @@ from taxtrace.warehouse_v2.census_taxonomy import (
     CensusCodeAmount,
     CensusExpenditurePartition,
     build_expenditure_partition,
+    formula_for_year,
 )
 from taxtrace.warehouse_v2.db_models import (
     DatasetDefinition,
@@ -17,10 +18,11 @@ from taxtrace.warehouse_v2.db_models import (
     GovernmentFinanceFact,
 )
 
-# Census total-expenditure families. Only the exact direct-general code formula
-# is additive in the published TaxTrace partition; the rest are retained as
-# explicit excluded native expenditure codes for auditability.
-EXPENDITURE_PREFIXES = frozenset({"E", "F", "G", "I", "J", "K", "L", "M", "Q", "S", "X", "Y"})
+# Expenditure-shaped native families retained for audit reporting. Only the
+# exact year-specific Census formula can enter the additive parent. Historical
+# G/K rows, intergovernmental rows, enterprise spending, and trust-system rows
+# can therefore remain visible as exclusions without being added to the parent.
+EXPENDITURE_PREFIXES = frozenset({"E", "F", "G", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "X", "Y"})
 
 
 @dataclass(frozen=True)
@@ -41,12 +43,13 @@ def load_government_expenditure_partition(
     fiscal_year: int,
     dataset_key: str | None = None,
 ) -> CensusGovernmentExpenditureResult | None:
-    """Build one government's official-code direct-general expenditure partition.
+    """Build one government's year-versioned direct-general expenditure partition.
 
     This reads the normalized Census individual-unit facts but never sums the
-    complete native result set. Only codes in the official Census direct-general
-    expenditure formula enter the additive parent.
+    complete native result set. Only codes in the implemented Census formula for
+    the requested year enter the additive parent.
     """
+    formula_for_year(fiscal_year)  # fail closed before selecting data for an unsupported year
     resolved_dataset_key = dataset_key or f"census-gov-finance-{fiscal_year}"
     dataset = session.scalar(
         select(DatasetDefinition).where(DatasetDefinition.key == resolved_dataset_key)
@@ -90,7 +93,7 @@ def load_government_expenditure_partition(
         if fact.is_imputed:
             imputed_codes.add(code)
 
-    partition = build_expenditure_partition(expenditure_rows)
+    partition = build_expenditure_partition(expenditure_rows, fiscal_year=fiscal_year)
     return CensusGovernmentExpenditureResult(
         dataset_key=dataset.key,
         release_key=release.release_key,
