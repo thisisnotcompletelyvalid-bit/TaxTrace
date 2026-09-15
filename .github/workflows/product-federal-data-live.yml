@@ -58,10 +58,11 @@ jobs:
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
       - run: alembic upgrade head
-      - name: Inspect current Treasury workbook layout
+      - name: Inspect current Treasury workbook and MTS Table 9 schema
         run: |
           python - <<'PY'
           import re
+          from collections import Counter, defaultdict
           from pathlib import Path
 
           import pandas as pd
@@ -94,6 +95,37 @@ jobs:
                           text = str(value).strip()
                           if re.search(r'\b(million|thousand|dollar|unit|amount)s?\b', text, re.I):
                               print('TREASURY_UNIT_TEXT', kind, sheet_name, int(row_index) + 1, col_index + 1, repr(text))
+
+          endpoint = 'https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/mts/mts_table_9'
+          payload = fetcher.get_json(
+              endpoint,
+              params={
+                  'filter': 'record_fiscal_year:eq:2025,record_calendar_month:eq:09',
+                  'sort': 'sequence_number_cd',
+                  'page[size]': 1000,
+              },
+          )
+          rows = payload.get('data') or []
+          print('MTS9_META_LABELS', payload.get('meta', {}).get('labels'))
+          print('MTS9_META_TYPES', payload.get('meta', {}).get('dataTypes'))
+          print('MTS9_ROW_COUNT', len(rows))
+          print('MTS9_RECORD_TYPES', Counter(row.get('record_type_cd') for row in rows))
+          print('MTS9_DATA_TYPES', Counter(row.get('data_type_cd') for row in rows))
+          print('MTS9_SEQUENCE_LEVELS', Counter(row.get('sequence_level_nbr') for row in rows))
+          samples = defaultdict(list)
+          for row in rows:
+              record_type = row.get('record_type_cd') or '<blank>'
+              if len(samples[record_type]) < 12:
+                  samples[record_type].append({
+                      key: row.get(key)
+                      for key in (
+                          'record_date', 'record_type_cd', 'data_type_cd', 'line_code_nbr',
+                          'sequence_level_nbr', 'sequence_number_cd', 'classification_desc',
+                          'current_fytd_rcpt_outly_amt',
+                      )
+                  })
+          for record_type, sample_rows in sorted(samples.items()):
+              print('MTS9_RECORD_TYPE_SAMPLE', record_type, sample_rows)
           PY
       - name: Seed federal methodology and ingest current real federal controls
         run: |
