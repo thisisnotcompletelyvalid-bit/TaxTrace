@@ -6,6 +6,8 @@ on:
       - data-activation-v1
     paths:
       - '.github/workflows/product-federal-data-live.yml'
+      - 'src/taxtrace/cli.py'
+      - 'src/taxtrace/warehouse_v2/cli.py'
       - 'src/taxtrace/warehouse_v2/product_activation.py'
       - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
@@ -15,6 +17,8 @@ on:
       - main
     paths:
       - '.github/workflows/product-federal-data-live.yml'
+      - 'src/taxtrace/cli.py'
+      - 'src/taxtrace/warehouse_v2/cli.py'
       - 'src/taxtrace/warehouse_v2/product_activation.py'
       - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
