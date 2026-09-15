@@ -17,9 +17,9 @@ The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATE
 - **Phase 8:** Alachua County surtax routed through its dedicated school-capital, Wild Spaces & Public Places, and infrastructure purposes; Gainesville FY2025 audited governmental spending is available as a non-additive actual reference.
 - **Phase 9A:** statistical quick-mode sales-tax estimation using 2024 BLS Consumer Expenditure income-quintile data and an explicit Florida taxability matrix. It does **not** use `income × sales-tax rate`.
 - **Warehouse V2:** national Census government registry and finance ingestion, SQL + Parquet lake storage, coverage metadata, native-ledger schema, validated USAspending DATA Act File A/B/C account ingestion, and live-validated D1/D2 prime-transaction + File F subaward ingestion.
-- **Federal receipt V2 bridge:** the conserved personalized federal receipt can now use Warehouse V2 File B to partition each OMB-controlled federal-account attribution into program activity × object class detail without adding OMB and USAspending outlays together.
+- **Federal Product V2:** the personalized homepage now uses the V2 receipt as its primary calculation path, partitions OMB-controlled account amounts with File B, projects only the defensible File C award-financial share, and exposes D1/D2 recipient plus File F subaward drilldown without creating additional personalized dollars.
 
-Methodology version: **1.2.0**. Application version: **0.5.1**.
+Methodology version: **1.3.0**. Application version: **0.6.0**.
 
 ## National warehouse status
 
@@ -57,15 +57,21 @@ These columns alias USAspending's canonical generated award identity. They are r
 
 See `docs/DATA_WAREHOUSE_V2.md` for architecture, source semantics, commands, validation results, and release gates.
 
-## Federal receipt V2 bridge
+## Federal Product V2
 
-`POST /v2/receipt/federal` preserves the existing calculated tax and financing-pool methodology while connecting the personalized receipt to Warehouse V2 File B detail.
+`POST /v2/receipt/federal` preserves the calculated tax and financing-pool methodology while connecting the personalized receipt to Warehouse V2.
 
-OMB actual account outlays remain the controlling additive parent values. A full-fiscal-year USAspending File B release may partition an already-attributed account amount across program activity × object class children using File B outlay shares. File B government outlay values are displayed independently and are never added to OMB outlays.
+OMB actual account outlays remain the controlling additive parent values. Full-year File B may partition an already-attributed account amount across program activity × object class children using File B outlay shares. OMB and File B government outlay values are displayed independently and are never added together.
 
-The bridge only treats File B as a safe full-year receipt partition when the stored download provenance identifies period `12`. If a matching READY release is unavailable, its normalized Parquet objects are not local, or a safe full-year partition cannot be established, the receipt remains conserved and exposes explicit detail-unavailable residual children instead of inventing detail.
+File C is not assumed to describe the whole account. Federal Product V2 uses the matching full-year File B account outlay as the denominator and File C award-financial outlays as the numerator. Only that defensible fraction of the personalized OMB account can enter the award view; the remaining amount stays an explicit non-award/unreconciled residual. If File C cannot be conservatively bounded by File B, no personalized dollars are assigned to awards for that account.
 
-File B children are additive only inside their account-detail partition. They must not be added to purpose, agency, award, File C, D1/D2, or File F views.
+Repeated File C rows are collapsed to the canonical award identity before personalized shares are calculated. Blank identities remain an explicit unlinked File C bucket. A selected collapsed identity can then be enriched independently from D1/D2 prime transactions and File F subawards without raw many-to-many joins.
+
+D1/D2 and File F are descriptive drilldown grains. Their transaction, award, and subaward amounts do not create additional personalized dollars. File F is downstream of the prime award and is always non-additive to the receipt.
+
+The account-download path accepts File B/File C for full-year personalization only when stored request provenance proves reporting period `12`. D1/D2/File F product detail requires a READY full-fiscal-year release; bounded live-validation slices prove ingestion behavior but do not masquerade as annual coverage.
+
+See `docs/FEDERAL_PRODUCT_V2.md` and `docs/METHODOLOGY.md` for the complete accounting rules, failure behavior, and additivity matrix.
 
 ## Codespaces / no-Docker run
 
@@ -96,7 +102,7 @@ In GitHub Codespaces, open port **3000** from the Ports tab. The frontend uses a
 
 Useful routes:
 
-- `/` — federal receipt, explorer, and search
+- `/` — Federal Product V2 receipt/explorer plus the current V1 search index
 - `/florida` — Florida + Alachua + Gainesville phases 7, 8, and 9A
 - backend `/docs` — FastAPI documentation
 - backend `/health` — API health/version
@@ -116,19 +122,27 @@ The sales-tax estimate selects the 2024 BLS **second income quintile** and is la
 
 ## API
 
-Federal receipt V1:
-
-`POST /v1/receipt/federal`
-
-Federal receipt V2 bridge:
+Primary federal receipt:
 
 `POST /v2/receipt/federal`
+
+Conserved File C award projection:
+
+`POST /v2/explorer/federal/awards`
+
+Non-additive D1/D2/File F award detail:
+
+`POST /v2/explorer/federal/award-detail`
+
+Stable V1 federal receipt remains available during staged migration:
+
+`POST /v1/receipt/federal`
 
 Florida/Gainesville receipt:
 
 `POST /v1/receipt/florida-gainesville`
 
-Example body:
+Example receipt body:
 
 ```json
 {
@@ -143,6 +157,15 @@ Example body:
 }
 ```
 
+Award-detail body:
+
+```json
+{
+  "fiscal_year": 2025,
+  "award_identity": "<canonical generated award identity>"
+}
+```
+
 Other V1 endpoints include:
 
 - `POST /v1/explorer/federal`
@@ -150,9 +173,8 @@ Other V1 endpoints include:
 - `POST /v1/search/federal`
 - `GET /v1/warehouse/status`
 
-Warehouse V2 endpoints:
+Warehouse V2 data endpoints include:
 
-- `POST /v2/receipt/federal`
 - `GET /v2/data/catalog`
 - `GET /v2/data/stats`
 - `GET /v2/data/governments/search?q=Gainesville`
@@ -243,7 +265,7 @@ ruff check src apps tests
 python -m compileall -q src apps alembic
 ```
 
-Normal GitHub Actions CI also runs migrations, frontend build, and no-Docker end-to-end application checks. The no-Docker API smoke now exercises both the stable V1 receipt and the Warehouse V2 federal receipt bridge.
+Normal GitHub Actions CI also runs migrations, frontend build, and no-Docker end-to-end application checks. Synthetic Warehouse V2 tests validate File B conservation, File C identity collapse and denominator gating, D1/D2 transaction collapse, File F non-additivity, and missing-lake fallback behavior.
 
 Expensive real-source release gates are manual workflows:
 
@@ -255,18 +277,18 @@ Expensive real-source release gates are manual workflows:
 
 ```text
 apps/
-  api/                         FastAPI application, including /v2/data and /v2/receipt
-  web/                         Next.js UI, including /florida
+  api/                         FastAPI application, including /v2/data, /v2/receipt and /v2/explorer
+  web/                         Next.js UI, including Federal Product V2 and /florida
 src/taxtrace/
   tax/                         federal tax engine
   finance/                     federal snapshots and legacy ingestion
-  allocation/                  federal receipt engine
+  allocation/                  controlling federal receipt engine
   jurisdictional/              phases 7, 8 and 9A
-  warehouse_v2/                national catalog, Census, lake, native, USAspending bulk, receipt bridge
+  warehouse_v2/                national warehouse, federal receipt/award product services
   data/source_catalog_v2.json  authoritative warehouse source manifest
-  explorer.py                  federal drill-down engine
-  search.py                    federal portable search index
-  methodology/                 machine-enforced invariants
+  explorer.py                  mature V1 core-classification explorer
+  search.py                    current federal portable search index
+  methodology/                 invariants + centralized methodology version
   data/statistical/            versioned 9A model data
 data/
   fixtures/                    deterministic test fixtures
@@ -274,6 +296,7 @@ data/
   warehouse/lake/              normalized Parquet lake, git-ignored
 docs/
   DATA_WAREHOUSE_V2.md
+  FEDERAL_PRODUCT_V2.md
   PHASE_7_8_9A.md
   PRODUCT_SCOPE.md
   METHODOLOGY.md

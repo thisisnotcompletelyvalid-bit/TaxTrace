@@ -5,6 +5,7 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from taxtrace.enums import AllocationRelation, ConfidenceGrade, DataStatus, FinancialMetric
+from taxtrace.methodology.version import METHODOLOGY_VERSION
 from taxtrace.tax.models import FederalTaxInput, FederalTaxResult
 
 
@@ -71,7 +72,7 @@ class TaxToPoolAllocation(BaseModel):
 
 
 class FederalReceiptResult(BaseModel):
-    methodology_version: str = "1.1.0"
+    methodology_version: str = METHODOLOGY_VERSION
     tax_result: FederalTaxResult
     spending_fiscal_year: int
     spending_metric: FinancialMetric = FinancialMetric.OUTLAY

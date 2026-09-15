@@ -87,7 +87,7 @@ Treasury and OMB remain authoritative controls for federal totals and account st
 - **File D2:** assistance prime-award transactions and attributes;
 - **File F:** contract and assistance subawards.
 
-All six source families are now implemented in the Warehouse V2 ingestion framework. They are not six additive piles of spending.
+All six source families are implemented in the Warehouse V2 ingestion framework. They are not six additive piles of spending.
 
 ### Asynchronous download semantics
 
@@ -145,6 +145,22 @@ But this is an **identity crosswalk, not an additive join**. File C can contain 
 File F is downstream of a prime award. Its amount must never be added beside the prime award as if it were another federal expenditure. It is a drill-down relationship.
 
 The machine-readable relationship specification lives in `src/taxtrace/warehouse_v2/usaspending_award_crosswalk.py` and marks every C↔D↔F crosswalk non-additive with identity-collapse required.
+
+### Federal Product V2 bridge
+
+TaxTrace 0.6.0 connects these warehouse grains to the personalized federal product without changing the controlling accounting base.
+
+- OMB actual account outlays remain the controlling additive federal-account parent.
+- File B can partition an already-attributed account into program activity × object class children when a safe full-year release is available.
+- File C is not normalized to the whole account. Its full-year account outlay is divided by the matching File B account outlay to determine the maximum personalized award-financial share.
+- Repeated File C rows are collapsed by canonical award identity before personalized award shares are assigned.
+- Unlinked File C activity is preserved explicitly.
+- If File C is negative at the account-total level, exceeds the File B denominator, or otherwise cannot be bounded conservatively, personalized award allocation is refused for that account.
+- D1/D2 are queried independently by the already-collapsed identity to provide prime-award transaction and recipient context. They do not add personalized dollars.
+- File F subawards are downstream, `additive=false` detail and do not add personalized dollars.
+- The product requires full-year File B/File C provenance for annual personalized allocation and a READY full-fiscal-year D1/D2/File F release for annual descriptive award coverage. Bounded validation slices remain validation evidence only.
+
+See `docs/FEDERAL_PRODUCT_V2.md` and methodology 1.3.0 in `docs/METHODOLOGY.md` for the complete formulas, gates, residual behavior, and additivity matrix.
 
 Large federal downloads belong in the lake. Application tables should materialize the dimensions and aggregates needed for interactive use, not blindly duplicate every federal row into one relational table.
 
@@ -229,8 +245,11 @@ The generic `usaspending-submit` command remains available for exact official US
 
 ## API
 
-Warehouse V2 is exposed under `/v2/data` while the personalized allocation engine remains under the existing receipt endpoints:
+Warehouse V2 data is exposed under `/v2/data`; Federal Product V2 adds personalized receipt/explorer endpoints:
 
+- `POST /v2/receipt/federal`
+- `POST /v2/explorer/federal/awards`
+- `POST /v2/explorer/federal/award-detail`
 - `GET /v2/data/catalog`
 - `GET /v2/data/stats`
 - `GET /v2/data/governments/search?q=Gainesville`
@@ -266,16 +285,16 @@ The currently validated manual gates are:
 
 ## Next ingestion/product order
 
-The national registry, 2022 Census finance baseline, 2024 finance-sample framework, USAspending File A/B/C ingestion, and D1/D2/File F award/subaward ingestion are now implemented.
+The national registry, 2022 Census finance baseline, 2024 finance-sample framework, all six federal USAspending source families, and the Federal Product V2 receipt/account/award bridge are now implemented.
 
-The highest-value next work is no longer another federal source. It is to connect Warehouse V2 to the personalized product:
+The next highest-value work is product breadth and discoverability rather than another federal source:
 
-1. **Federal receipt/explorer V2 bridge** using Warehouse V2 account/program/object and award relationships while preserving one explicit additive partition;
-2. **Federal award/recipient/subaward search** over D1/D2/File F without treating search results as additive;
-3. **Official Census additive taxonomy** for mutually exclusive state/local receipt categories;
-4. **State/local receipt V2 bridge** using the national Census warehouse;
-5. **native-ledger platform adapters** for deeper state/local transaction detail;
-6. Census public employment/payroll and public pensions;
-7. geographic/jurisdiction resolution for user-selected locations.
+1. **Federal Search V2 (0.6.5):** index D1/D2/File F awards, recipients, subawards, and subrecipients while preserving non-additive search semantics;
+2. **Official Census additive taxonomy (0.7.0):** create defensible mutually exclusive state/local receipt categories from native Census finance item codes;
+3. **Geographic/jurisdiction resolution (0.7.5):** resolve user-selected locations to applicable state, county, municipal, school, and later special-district governments with explicit coverage;
+4. **Nationwide state/local receipt V2 bridge (0.8.0):** connect supported tax liabilities and Census additive spending partitions for resolved jurisdictions;
+5. **Tax Model V2 / Phase 9B (0.8.5):** richer optional inputs and improved modeled consumption where actual taxable bases are unknown;
+6. **native-ledger platform adapters:** deeper state/local transaction, vendor, contract, grant, and project detail after the comparable national floor is operational;
+7. Census public employment/payroll and public pensions as contextual enrichment rather than 1.0 blockers.
 
 The governing rule remains breadth first through authoritative standardized data, then depth through native sources, without sacrificing provenance, additive semantics, or conservation.
