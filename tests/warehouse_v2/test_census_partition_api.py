@@ -40,16 +40,18 @@ def test_taxonomy_endpoint_reports_machine_valid_year_specific_parent() -> None:
     result = census_taxonomy(2022)
 
     assert result["taxonomy_version"] == "1.2.0"
-    assert result["formula_key"] == "census-sf0176-direct-general-2022-2024"
+    assert result["formula_key"] == "census-state-local-direct-general-2022-2024"
     assert result["fiscal_year"] == 2022
     assert result["supported_fiscal_years"] == [2022, 2024]
     assert result["parent"]["key"] == "direct_general_expenditure"
     assert result["parent"]["additive"] is True
     assert len(result["parent"]["native_item_codes"]) == 72
+    assert "E24" in result["parent"]["native_item_codes"]
+    assert "F24" in result["parent"]["native_item_codes"]
     assert "F62" in result["parent"]["native_item_codes"]
     assert "G62" not in result["parent"]["native_item_codes"]
-    assert "E24" not in result["parent"]["native_item_codes"]
-    assert "F24" not in result["parent"]["native_item_codes"]
+    assert "E54" not in result["parent"]["native_item_codes"]
+    assert "F54" not in result["parent"]["native_item_codes"]
     assert result["audit"]["valid"] is True
     assert result["semantics"]["raw_census_rows_additive"] is False
     assert result["semantics"]["partition_additive"] is True
@@ -134,12 +136,12 @@ def test_government_partition_uses_one_ready_census_release_and_conserves(db_ses
     assert result["release"] == "FY2022"
     assert result["coverage_type"] == "CENSUS"
     assert result["taxonomy_version"] == "1.2.0"
-    assert result["formula_key"] == "census-sf0176-direct-general-2022-2024"
+    assert result["formula_key"] == "census-state-local-direct-general-2022-2024"
     assert result["additive"] is True
-    assert result["parent"]["amount"] == "125.00"
+    assert result["parent"]["amount"] == "175.00"
     assert result["conservation_difference"] == "0.00"
     assert result["residual"]["amount"] == "0.00"
-    assert result["excluded_native_expenditure_codes"] == ["E24", "E27", "E91", "G44", "J67", "L44"]
+    assert result["excluded_native_expenditure_codes"] == ["E27", "E91", "G44", "J67", "L44"]
     assert result["imputed_codes"] == ["F62"]
     assert result["source_row_count"] == 8
     assert len(result["source_urls"]) >= 3
@@ -147,5 +149,6 @@ def test_government_partition_uses_one_ready_census_release_and_conserves(db_ses
     by_key = {node["key"]: node for node in result["nodes"]}
     assert by_key["police"]["amount"] == "125.00"
     assert by_key["police"]["item_codes"] == ["E62", "F62"]
-    assert "fire" not in by_key
-    assert sum(Decimal(node["amount"]) for node in result["nodes"]) == Decimal("125.00")
+    assert by_key["fire_protection"]["amount"] == "50.00"
+    assert by_key["fire_protection"]["item_codes"] == ["E24"]
+    assert sum(Decimal(node["amount"]) for node in result["nodes"]) == Decimal("175.00")
