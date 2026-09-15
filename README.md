@@ -1,50 +1,50 @@
 # TaxTrace — auditable tax attribution + national public-finance warehouse
 
-TaxTrace is an auditable **“where do my taxes go?”** application. It calculates supported personal taxes, attributes them to government spending without pretending fungible dollars are literally traceable, and is being expanded around a national multi-jurisdiction public-finance warehouse.
+TaxTrace is an auditable **“where do my taxes go?”** application. It calculates supported personal taxes, attributes them to government spending without pretending fungible dollars are literally traceable, and connects that receipt to a national multi-jurisdiction public-finance warehouse.
 
-The core rule is simple: **CALCULATED is not MODELED, and DIRECT is not ALLOCATED.** Dedicated revenues stay restricted to their funding purpose. Fungible revenues are proportionally attributed across eligible actual spending. Additive personalized receipts reconcile exactly after cent rounding.
+The core rules are simple: **CALCULATED is not MODELED, DIRECT is not ALLOCATED, and overlapping accounting views are not additive.** Dedicated revenues stay restricted to their financing purpose. Fungible revenues are proportionally attributed across eligible actual spending. Additive personalized receipts reconcile exactly after cent rounding.
+
+**Application version: 0.6.5. Methodology version: 1.3.0.**
 
 ## What is implemented
 
 - **Phase 0:** Python package, FastAPI, Next.js, SQLite/PostgreSQL, Alembic, CI, immutable source snapshots.
-- **Phase 1:** methodology/invariants for DIRECT vs ALLOCATED, transfers, deficits, non-additive classifications, provenance.
+- **Phase 1:** methodology/invariants for DIRECT vs ALLOCATED, transfers, deficits, non-additive classifications, provenance, and refusal behavior.
 - **Phase 2:** versioned 2026 federal W-2 personal tax engine.
-- **Phase 3:** Treasury/OMB/USAspending warehouse and reconciliation.
-- **Phase 4:** tax → revenue type → financing pool → eligible actual outlays → complete federal receipt.
+- **Phase 3:** Treasury/OMB/USAspending finance warehouse and reconciliation.
+- **Phase 4:** tax → revenue type → financing pool → eligible actual outlays → complete conserved federal receipt.
 - **Phase 5:** purpose, agency, account, program-activity, object-class, and award explorer.
-- **Phase 6:** indexed search over agencies, accounts, programs, awards, recipients, aliases, abbreviations, and curated synonyms.
-- **Phase 7:** modeled Florida state sales tax attributed across FY2025 audited State of Florida governmental-activity expenses.
-- **Phase 8:** Alachua County surtax routed through its dedicated school-capital, Wild Spaces & Public Places, and infrastructure purposes; Gainesville FY2025 audited governmental spending is available as a non-additive actual reference.
-- **Phase 9A:** statistical quick-mode sales-tax estimation using 2024 BLS Consumer Expenditure income-quintile data and an explicit Florida taxability matrix. It does **not** use `income × sales-tax rate`.
-- **Warehouse V2:** national Census government registry and finance ingestion, SQL + Parquet lake storage, coverage metadata, native-ledger schema, validated USAspending DATA Act File A/B/C account ingestion, and live-validated D1/D2 prime-transaction + File F subaward ingestion.
-- **Federal Product V2:** the personalized homepage now uses the V2 receipt as its primary calculation path, partitions OMB-controlled account amounts with File B, projects only the defensible File C award-financial share, and exposes D1/D2 recipient plus File F subaward drilldown without creating additional personalized dollars.
+- **Phase 6:** portable legacy search over normalized finance entities.
+- **Phase 7:** modeled Florida state sales tax attributed across FY2025 audited Florida governmental-activity expenses.
+- **Phase 8:** Alachua County surtax routed through dedicated legal-purpose pools; Gainesville FY2025 audited spending retained as a non-additive actual reference.
+- **Phase 9A:** statistical quick-mode sales-tax estimation using 2024 BLS Consumer Expenditure income-quintile data and an explicit Florida taxability matrix.
+- **Warehouse V2:** nationwide Census government/finance backbone plus raw + Parquet lake storage, coverage metadata, native-ledger schema, USAspending File A/B/C account ingestion, and D1/D2/File F award/subaward ingestion.
+- **Federal Product V2:** OMB-controlled personalized federal accounts, File B program/object partitioning, conservative File C award projection, D1/D2 prime-recipient enrichment, and non-additive File F subaward drilldown.
+- **Federal Search V2:** direct full-year D1/D2/File F Parquet search for prime awards, recipients, subawards, and subrecipients, with optional receipt-aware annotation from the existing File C personalized projection.
 
-Methodology version: **1.3.0**. Application version: **0.6.0**.
+## Accounting model
 
-## National warehouse status
+The personalized federal receipt is controlled by OMB actual account outlays. Warehouse V2 adds deeper classifications without turning alternate source grains into new piles of spending.
 
-Warehouse V2 is designed around source grain rather than forcing every government into one additive tree. Function, department, fund, program, object class, project, recipient, vendor, award, account, and geography are treated as dimensions that can overlap.
+### File B
 
-The complete real-source 2022 Census validation successfully loaded:
+A full-year USAspending File B release may partition an already-attributed OMB federal-account amount across program activity × object class using File B outlay shares. OMB and File B government totals are shown independently and are never added together.
 
-- **92,114** government-unit source records;
-- **88,819** governments with finance facts;
-- **1,337,594** normalized finance facts;
-- **211** finance classifications/item codes;
-- a matching **1,337,594-row** compressed Parquet mirror.
+The current account-download path accepts File B as full-year personalization evidence only when stored request provenance proves reporting period `12`.
 
-A populated official USAspending FY2022 account validation materialized **172 File A rows, 2,557 File B rows, and 828,069 File C rows** into separate Parquet datasets. File A/B/C are distinct grains and are explicitly not additive to one another.
+### File C
 
-A separate live Custom Award Data Download validation used the federal-wide **March 1, 2022 action-date slice** and successfully classified and materialized all four required prime/subaward families:
+File C is award-financial activity, not proof that an entire federal account consists of awards. TaxTrace therefore uses the matching full-year File B account outlay as the denominator and File C outlay as the numerator.
 
-- **29,507 D1 contract prime-transaction rows**;
-- **16,111 D2 assistance prime-transaction rows**;
-- **2,327 contract File F subaward rows**;
-- **4,402 assistance File F subaward rows**.
+Only the defensible File C fraction of the personalized OMB account may enter the award view. Remaining dollars stay an explicit non-award/unreconciled residual. If File C cannot be conservatively bounded by File B, TaxTrace refuses award personalization for that account rather than normalizing File C to 100%.
 
-That is **45,618 D1/D2 prime-transaction rows** and **6,729 File F subaward rows** in the bounded live validation slice.
+Repeated File C rows are collapsed to canonical award identity before personalized shares are calculated. Blank identities remain explicit unlinked activity.
 
-The archive schema also validated the canonical award-identity path:
+### D1 / D2 / File F
+
+D1 and D2 are prime-award **transaction** grains. File F is downstream subaward detail. Their transaction, award, obligation, and subaward monetary fields do not create additional personalized dollars.
+
+The validated canonical relationship is:
 
 ```text
 File C award_unique_key
@@ -53,96 +53,106 @@ File C award_unique_key
 ↔ File F prime_award_unique_key
 ```
 
-These columns alias USAspending's canonical generated award identity. They are relationship keys, not permission to sum or naively row-join the grains. File C and D1/D2 can repeat the same award identity, so cross-grain enrichment must first collapse or otherwise constrain each side to the intended award-identity grain to avoid many-to-many fan-out. File F remains downstream of the prime award and must never be added beside prime-award spending as another federal expenditure.
+This is an identity crosswalk, not permission to raw-join or sum the grains. File C and D1/D2 can repeat an award identity, so identity collapse is required before enrichment. File F remains downstream of the prime award.
 
-See `docs/DATA_WAREHOUSE_V2.md` for architecture, source semantics, commands, validation results, and release gates.
+See `docs/FEDERAL_PRODUCT_V2.md` and `docs/METHODOLOGY.md` for the complete accounting rules.
 
-## Federal Product V2
+## Federal Search V2
 
-`POST /v2/receipt/federal` preserves the calculated tax and financing-pool methodology while connecting the personalized receipt to Warehouse V2.
+Federal Search V2 searches normalized full-year D1/D2 and File F Parquet directly with DuckDB instead of copying award-scale rows into the legacy relational search table.
 
-OMB actual account outlays remain the controlling additive parent values. Full-year File B may partition an already-attributed account amount across program activity × object class children using File B outlay shares. OMB and File B government outlay values are displayed independently and are never added together.
+D1/D2 matches collapse to canonical prime-award identity before display. Recipient results group distinct prime identities by name/UEI. File F subawards remain downstream search/navigation results. All results expose non-additive semantics.
 
-File C is not assumed to describe the whole account. Federal Product V2 uses the matching full-year File B account outlay as the denominator and File C award-financial outlays as the numerator. Only that defensible fraction of the personalized OMB account can enter the award view; the remaining amount stays an explicit non-award/unreconciled residual. If File C cannot be conservatively bounded by File B, no personalized dollars are assigned to awards for that account.
+Public-data search:
 
-Repeated File C rows are collapsed to the canonical award identity before personalized shares are calculated. Blank identities remain an explicit unlinked File C bucket. A selected collapsed identity can then be enriched independently from D1/D2 prime transactions and File F subawards without raw many-to-many joins.
-
-D1/D2 and File F are descriptive drilldown grains. Their transaction, award, and subaward amounts do not create additional personalized dollars. File F is downstream of the prime award and is always non-additive to the receipt.
-
-The account-download path accepts File B/File C for full-year personalization only when stored request provenance proves reporting period `12`. D1/D2/File F product detail requires a READY full-fiscal-year release; bounded live-validation slices prove ingestion behavior but do not masquerade as annual coverage.
-
-See `docs/FEDERAL_PRODUCT_V2.md` and `docs/METHODOLOGY.md` for the complete accounting rules, failure behavior, and additivity matrix.
-
-## Codespaces / no-Docker run
-
-Requirements are Python 3.11+, Node.js 22+ recommended, npm, and Git.
-
-```bash
-git pull origin main
-
-python3 -m venv .venv        # first run only
-source .venv/bin/activate
-python -m pip install -U pip
-pip install -e '.[dev]'
-
-python -m taxtrace.dev_server --reload
+```text
+GET /v2/search/federal?q=Acme&fiscal_year=2025&limit=20
 ```
 
-The backend launcher runs Alembic migrations, seeds financing rules, loads/repairs the deterministic federal + Florida + Gainesville fixture layer when needed, rebuilds search, checks federal reconciliation, and starts FastAPI on internal port 8000.
+Receipt-aware search:
 
-Leave it running. In another terminal:
-
-```bash
-cd apps/web
-npm install
-npm run dev
+```text
+POST /v2/search/federal
 ```
 
-In GitHub Codespaces, open port **3000** from the Ports tab. The frontend uses a same-origin `/api` proxy to the backend inside the Codespace, so the browser does not need the forwarded port-8000 URL.
+Receipt-aware search may annotate a prime award or recipient only with personalized amounts already produced by the conserved File C projection. **File F never receives its own personalized amount.** A subaward may show the prime award's personalized amount as explicitly labeled context, but that amount is not allocated to the subaward.
 
-Useful routes:
+Only exact READY full-year award releases back annual Search V2 results. Missing releases or missing local Parquet produce explicit coverage states instead of fabricated completeness.
 
-- `/` — Federal Product V2 receipt/explorer plus the current V1 search index
-- `/florida` — Florida + Alachua + Gainesville phases 7, 8, and 9A
-- backend `/docs` — FastAPI documentation
-- backend `/health` — API health/version
+The dedicated web route is `/search`. See `docs/FEDERAL_SEARCH_V2.md` for the detailed search contract.
 
-For a local run, the website is normally `http://localhost:3000` and API docs are `http://127.0.0.1:8000/docs`.
+## National warehouse status
 
-## Deterministic quick-mode example
+Warehouse V2 preserves source grain rather than forcing every government into one additive tree. Function, department, fund, program, object class, project, recipient, vendor, award, account, and geography can be overlapping dimensions.
 
-For a 2026 single filer with `$50,000` of W-2 wages, the fixture-backed deterministic test currently produces:
+The complete real-source 2022 Census validation loaded:
 
-- supported federal personal tax liability: **$7,645.00**;
-- Phase 9A modeled Florida state sales tax: **$791.35**;
-- modeled Alachua discretionary surtax: **$197.84**;
-- total supported calculated + modeled tax: **$8,634.19**.
+- **92,114** government-unit source records;
+- **88,819** governments with finance facts;
+- **1,337,594** normalized finance facts;
+- **211** finance classifications/item codes;
+- **1,337,594** matching compressed Parquet rows.
 
-The sales-tax estimate selects the 2024 BLS **second income quintile** and is labeled `MODELED`, confidence `C`. Property tax, fuel tax, utility taxes, communications taxes, fees, employer-side incidence, landlord property-tax incidence, corporate incidence, and tariffs are not inferred from wage income.
+A populated official USAspending FY2022 account validation materialized:
 
-## API
+- **172 File A rows**;
+- **2,557 File B rows**;
+- **828,069 File C rows**.
 
-Primary federal receipt:
+A separate federal-wide March 1, 2022 Custom Award Data Download validation materialized:
 
-`POST /v2/receipt/federal`
+- **29,507 D1 contract prime-transaction rows**;
+- **16,111 D2 assistance prime-transaction rows**;
+- **2,327 contract File F subaward rows**;
+- **4,402 assistance File F subaward rows**.
 
-Conserved File C award projection:
+That bounded live validation contains **45,618 D1/D2 prime-transaction rows** and **6,729 File F subaward rows**. The bounded slice validates schemas, classification, identity keys, and materialization; it is not represented as complete annual product coverage.
 
-`POST /v2/explorer/federal/awards`
+See `docs/DATA_WAREHOUSE_V2.md` for source architecture and release gates.
 
-Non-additive D1/D2/File F award detail:
+## Web routes
 
-`POST /v2/explorer/federal/award-detail`
+- `/` — Federal Product V2 receipt and explorer.
+- `/search` — Federal Search V2 over Warehouse V2 awards/recipients/subawards.
+- `/florida` — Florida + Alachua + Gainesville phases 7, 8, and 9A.
+- backend `/docs` — FastAPI/OpenAPI documentation.
+- backend `/health` — API health and application version.
 
-Stable V1 federal receipt remains available during staged migration:
+## API highlights
 
-`POST /v1/receipt/federal`
+Federal Product V2:
 
-Florida/Gainesville receipt:
+```text
+POST /v2/receipt/federal
+POST /v2/explorer/federal/awards
+POST /v2/explorer/federal/award-detail
+GET  /v2/search/federal
+POST /v2/search/federal
+```
 
-`POST /v1/receipt/florida-gainesville`
+Warehouse V2 data:
 
-Example receipt body:
+```text
+GET /v2/data/catalog
+GET /v2/data/stats
+GET /v2/data/governments/search?q=Gainesville
+GET /v2/data/governments/{id}/coverage
+GET /v2/data/governments/{id}/finance
+GET /v2/data/governments/{id}/detail
+```
+
+Stable V1 compatibility surfaces remain available during staged migration:
+
+```text
+POST /v1/receipt/federal
+POST /v1/explorer/federal
+GET  /v1/search?q=food%20stamps
+POST /v1/search/federal
+GET  /v1/warehouse/status
+POST /v1/receipt/florida-gainesville
+```
+
+Example federal receipt body:
 
 ```json
 {
@@ -152,76 +162,45 @@ Example receipt body:
   "wage_income": "50000",
   "spouse_wage_income": "0",
   "qualifying_children_under_17": 0,
-  "other_dependents": 0,
-  "household_size": 1
+  "other_dependents": 0
 }
 ```
 
-Award-detail body:
+## Deterministic quick-mode example
 
-```json
-{
-  "fiscal_year": 2025,
-  "award_identity": "<canonical generated award identity>"
-}
-```
+For a 2026 single filer with `$50,000` of W-2 wages, the deterministic fixture stack currently produces:
 
-Other V1 endpoints include:
+- supported federal personal tax liability: **$7,645.00**;
+- Phase 9A modeled Florida state sales tax: **$791.35**;
+- modeled Alachua discretionary surtax: **$197.84**;
+- total supported calculated + modeled tax: **$8,634.19**.
 
-- `POST /v1/explorer/federal`
-- `GET /v1/search?q=food%20stamps`
-- `POST /v1/search/federal`
-- `GET /v1/warehouse/status`
+The sales-tax estimate is labeled `MODELED`, confidence `C`. Property tax, fuel tax, utility taxes, communications taxes, fees, employer-side incidence, landlord property-tax incidence, corporate incidence, tariffs, and other unsupported incidence are not inferred from wages.
 
-Warehouse V2 data endpoints include:
+## Codespaces / no-Docker run
 
-- `GET /v2/data/catalog`
-- `GET /v2/data/stats`
-- `GET /v2/data/governments/search?q=Gainesville`
-- `GET /v2/data/governments/{id}/coverage`
-- `GET /v2/data/governments/{id}/finance`
-- `GET /v2/data/governments/{id}/detail`
-
-Raw Census item-code results are marked non-additive. Native components and rollups must not be summed until an explicit additive partition has been constructed.
-
-## Phase 7 — Florida
-
-Florida quick mode does not invent a state individual income-tax liability. The modeled 6% general sales-tax component is attributed proportionally across FY2025 audited State of Florida governmental-activity expenses. That is `ALLOCATED` attribution, not literal tracing.
-
-The additive state expenditure partition covers general government, education, human services, criminal justice and corrections, natural resources/environment, transportation, judicial branch, and indirect interest on long-term debt.
-
-## Phase 8 — Alachua + Gainesville
-
-The current 1.5% Alachua discretionary surtax is modeled from consumption and then kept in separate legal-purpose pools:
-
-- 0.5 percentage point school capital outlay;
-- 0.5 percentage point Wild Spaces & Public Places;
-- 0.5 percentage point local-government infrastructure / Streets, Stations & Strong Foundations.
-
-For WSPP and the local-government infrastructure layer, TaxTrace uses the official population-based distribution of **56.98% Alachua County, 35.45% Gainesville, and 7.57% other municipalities**.
-
-Gainesville FY2025 audited governmental-activity expenditures total **$185,815,738** in the deterministic source transcription. They are displayed as `ACTUAL`, but quick mode does not assign that spending to the user because wages alone do not establish a defensible property-tax, utility-tax, fee, or other city liability.
-
-## Phase 9A — statistical sales-tax estimate
-
-The first estimator uses 2024 BLS Consumer Expenditure income-quintile expenditure totals. Quick-mode wages are an explicit proxy for BLS income before taxes. A versioned TaxTrace category-taxability matrix uses mutually exclusive expenditure components so parent/subcategory totals are not double-counted.
-
-Florida's general state sales-tax rate is 6%. Alachua's current discretionary surtax is 1.5%. Florida law generally caps discretionary surtax to the first `$5,000` of many individual tangible-personal-property transactions. Because quick mode has no transaction history, 9A exposes a limited approximation only for the modeled vehicle-purchase component rather than representing the cap as an exact statutory calculation.
-
-See `docs/PHASE_7_8_9A.md` and `docs/PRODUCT_SCOPE.md` for the source and methodology audit trail.
-
-## CLI examples
-
-Core application:
+Requirements: Python 3.11+, Node.js 22+ recommended, npm, Git.
 
 ```bash
-taxtrace tax federal --income 50000 --filing-status single
-taxtrace receipt federal --income 50000 --filing-status single --spending-fiscal-year 2025
-taxtrace search query "food stamps"
-taxtrace warehouse status
+git pull origin main
+python3 -m venv .venv        # first run only
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -e '.[dev]'
+python -m taxtrace.dev_server --reload
 ```
 
-National data warehouse:
+In another terminal:
+
+```bash
+cd apps/web
+npm install
+npm run dev
+```
+
+In GitHub Codespaces, open port **3000**. The frontend uses a same-origin `/api` proxy to the internal backend.
+
+## Warehouse CLI
 
 ```bash
 taxtrace data catalog
@@ -232,7 +211,7 @@ taxtrace data bootstrap-federal-accounts --fiscal-year 2025 --period 12
 taxtrace data bootstrap-federal-awards --fiscal-year 2025
 ```
 
-Existing source files can be inspected or ingested directly:
+Inspect or ingest existing archives:
 
 ```bash
 taxtrace data inspect-census-finance --file /path/to/2022_Individual_Unit_File.zip
@@ -243,19 +222,17 @@ taxtrace data inspect-usaspending-awards --file /path/to/awards.zip
 taxtrace data ingest-usaspending-awards --file /path/to/awards.zip --fiscal-year 2025 --request-json /path/to/request.json
 ```
 
-Manual award ingestion requires the exact request JSON that generated the archive so release provenance cannot silently be invented after the fact.
+Manual award ingestion requires the exact request JSON used to generate the archive so release provenance cannot be silently invented after the fact.
 
-## Live federal data ingestion
+## State/local scope
 
-The project remains fixture-runnable. Legacy API-oriented federal ingestion is still available:
+Florida quick mode does not invent a state individual wage-income tax liability. The modeled 6% general sales-tax component is attributed across FY2025 audited State of Florida governmental-activity expenses.
 
-```bash
-taxtrace warehouse ingest-treasury --fiscal-year 2025
-taxtrace warehouse ingest-omb --fiscal-year 2025
-taxtrace warehouse ingest-usaspending --fiscal-year 2025 --agency 012 --include-awards
-```
+The current 1.5% Alachua discretionary surtax is kept in separate legal-purpose pools for school capital, Wild Spaces & Public Places, and local-government infrastructure. Gainesville FY2025 audited governmental spending is available as an ACTUAL reference but is not assigned to the user unless a defensible personal city liability is known.
 
-For large DATA Act downloads, prefer the Warehouse V2 bulk paths. USAspending bulk jobs are asynchronous: TaxTrace polls until a terminal `finished` state before attempting to download the generated archive. Award bootstrap uses the distinct Custom Award Data Download endpoint and stores immutable request provenance with the raw archive.
+The national Census Warehouse V2 backbone is already implemented. The next state/local product phase is an official additive Census finance taxonomy, followed by jurisdiction resolution and a nationwide receipt bridge.
+
+See `docs/PHASE_7_8_9A.md` and `docs/PRODUCT_SCOPE.md`.
 
 ## Tests and release validation
 
@@ -265,31 +242,30 @@ ruff check src apps tests
 python -m compileall -q src apps alembic
 ```
 
-Normal GitHub Actions CI also runs migrations, frontend build, and no-Docker end-to-end application checks. Synthetic Warehouse V2 tests validate File B conservation, File C identity collapse and denominator gating, D1/D2 transaction collapse, File F non-additivity, and missing-lake fallback behavior.
+Normal CI also runs Alembic migrations, a standalone Next.js production build, and a no-Docker end-to-end API/browser smoke. Search V2 CI checks identity collapse, full-year release gating, File F non-additivity, receipt-context reuse of File C amounts, no-lake fallback behavior, both V2 search routes, and the production `/search` page.
 
-Expensive real-source release gates are manual workflows:
+Expensive real-source release gates remain manual:
 
-- **Warehouse Full Import Validation** — imports the complete real 2022 Census government registry and finance census and verifies SQL/Parquet counts;
-- **USAspending Live Archive Validation** — generates a real populated A/B/C archive, waits for `finished`, downloads it, classifies the real schemas, and materializes Parquet;
-- **USAspending Prime/Subaward Live Validation** — generates a real D1/D2/File F Custom Award Data Download, validates contract + assistance families and canonical award-identity keys, materializes separate Parquet datasets, and verifies nonzero parts.
+- **Warehouse Full Import Validation** — complete real 2022 Census government registry and finance import;
+- **USAspending Live Archive Validation** — real populated File A/B/C archive classification/materialization;
+- **USAspending Prime/Subaward Live Validation** — real D1/D2/File F archive validation with canonical crosswalk-key checks.
 
 ## Repository map
 
 ```text
 apps/
-  api/                         FastAPI application, including /v2/data, /v2/receipt and /v2/explorer
-  web/                         Next.js UI, including Federal Product V2 and /florida
+  api/                         FastAPI, including /v2/data, /v2/receipt, /v2/explorer, /v2/search
+  web/                         Next.js Federal Product V2, /search, and /florida
 src/taxtrace/
   tax/                         federal tax engine
   finance/                     federal snapshots and legacy ingestion
   allocation/                  controlling federal receipt engine
-  jurisdictional/              phases 7, 8 and 9A
-  warehouse_v2/                national warehouse, federal receipt/award product services
+  jurisdictional/              phases 7, 8, and 9A
+  warehouse_v2/                national warehouse + V2 receipt/award/search services
   data/source_catalog_v2.json  authoritative warehouse source manifest
   explorer.py                  mature V1 core-classification explorer
-  search.py                    current federal portable search index
+  search.py                    legacy portable search index
   methodology/                 invariants + centralized methodology version
-  data/statistical/            versioned 9A model data
 data/
   fixtures/                    deterministic test fixtures
   raw/                         downloaded source archives, git-ignored
@@ -297,11 +273,10 @@ data/
 docs/
   DATA_WAREHOUSE_V2.md
   FEDERAL_PRODUCT_V2.md
+  FEDERAL_SEARCH_V2.md
   PHASE_7_8_9A.md
   PRODUCT_SCOPE.md
   METHODOLOGY.md
-alembic/
-tests/
 ```
 
 ## Scope note

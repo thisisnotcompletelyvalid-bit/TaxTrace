@@ -28,8 +28,8 @@ def test_build_full_fiscal_year_award_payload() -> None:
         "start_date": "2024-10-01",
         "end_date": "2025-09-30",
     }
-    assert filters["prime_award_types"] == PRIME_AWARD_TYPES
-    assert filters["sub_award_types"] == SUBAWARD_TYPES
+    assert filters["prime_award_types"] == list(PRIME_AWARD_TYPES)
+    assert filters["sub_award_types"] == list(SUBAWARD_TYPES)
 
 
 def test_build_narrow_agency_award_payload() -> None:

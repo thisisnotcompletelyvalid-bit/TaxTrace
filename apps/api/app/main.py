@@ -13,13 +13,14 @@ from apps.api.app.routers import (
     receipt,
     receipt_v2,
     search,
+    search_v2,
     tax,
     warehouse,
 )
 
 app = FastAPI(
     title="TaxTrace API",
-    version="0.6.0",
+    version="0.6.5",
     description="Tax attribution plus a national multi-jurisdiction public-finance warehouse.",
 )
 app.add_middleware(
@@ -46,3 +47,4 @@ app.include_router(methodology.router, prefix="/v1")
 app.include_router(data_v2.router, prefix="/v2")
 app.include_router(receipt_v2.router, prefix="/v2")
 app.include_router(explorer_v2.router, prefix="/v2")
+app.include_router(search_v2.router, prefix="/v2")

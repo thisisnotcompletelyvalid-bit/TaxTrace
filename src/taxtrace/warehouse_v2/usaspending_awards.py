@@ -8,47 +8,12 @@ from sqlalchemy.orm import Session
 
 from taxtrace.config import get_settings
 from taxtrace.warehouse_v2.catalog import seed_catalog
-from taxtrace.warehouse_v2.usaspending_award_lake import materialize_award_archive
+from taxtrace.warehouse_v2.usaspending_award_lake import (
+    PRIME_AWARD_TYPES,
+    SUBAWARD_TYPES,
+    materialize_award_archive,
+)
 from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
-
-# Current values accepted by USAspending's Custom Award Data Download validator.
-# Keep the native codes rather than collapsing contract, assistance, and IDV types.
-PRIME_AWARD_TYPES = [
-    "A",
-    "B",
-    "C",
-    "D",
-    "IDV_A",
-    "IDV_B",
-    "IDV_B_A",
-    "IDV_B_B",
-    "IDV_B_C",
-    "IDV_C",
-    "IDV_D",
-    "IDV_E",
-    "02",
-    "03",
-    "04",
-    "05",
-    "06",
-    "07",
-    "08",
-    "09",
-    "10",
-    "11",
-    "-1",
-    "F001",
-    "F002",
-    "F003",
-    "F004",
-    "F005",
-    "F006",
-    "F007",
-    "F008",
-    "F009",
-    "F010",
-]
-SUBAWARD_TYPES = ["grant", "procurement"]
 
 
 def fiscal_year_date_range(fiscal_year: int) -> tuple[date, date]:
@@ -94,9 +59,9 @@ def build_award_bulk_payload(
         },
     }
     if include_prime_awards:
-        filters["prime_award_types"] = PRIME_AWARD_TYPES
+        filters["prime_award_types"] = list(PRIME_AWARD_TYPES)
     if include_subawards:
-        filters["sub_award_types"] = SUBAWARD_TYPES
+        filters["sub_award_types"] = list(SUBAWARD_TYPES)
 
     return {"filters": filters, "file_format": "csv"}
 
