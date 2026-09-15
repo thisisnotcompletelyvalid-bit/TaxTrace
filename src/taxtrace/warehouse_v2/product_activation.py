@@ -21,6 +21,9 @@ from taxtrace.warehouse_v2.catalog import seed_catalog
 from taxtrace.warehouse_v2.census import bootstrap_national_census
 from taxtrace.warehouse_v2.census_lake import materialize_finance_parquet
 from taxtrace.warehouse_v2.db_models import BulkObject, DatasetDefinition, DatasetRelease
+from taxtrace.warehouse_v2.lake import LakeStore
+from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
+from taxtrace.warehouse_v2.usaspending_lake import materialize_account_archive
 
 MIN_GOVERNMENT_REGISTRY_ROWS = 90_000
 MIN_CENSUS_2022_FINANCE_ROWS = 1_300_000
@@ -38,6 +41,8 @@ class DatasetReadiness:
     row_count: int
     government_count: int
     parquet_objects: int
+    local_parquet_objects: int
+    full_fiscal_year: bool
     ready: bool
 
 
@@ -46,9 +51,13 @@ class ProductDataReadiness:
     mode: str
     national_state_local_ready: bool
     federal_core_ready: bool
+    federal_account_detail_ready: bool
     government_registry: DatasetReadiness
     census_finance_2022: DatasetReadiness
     census_finance_2024: DatasetReadiness
+    usaspending_file_a: DatasetReadiness
+    usaspending_file_b: DatasetReadiness
+    usaspending_file_c: DatasetReadiness
     real_omb_account_rows: int
     real_treasury_rows: int
     fixture_snapshot_count: int
@@ -65,6 +74,8 @@ def _dataset_release_status(
     release_key: str,
     min_rows: int = 0,
     min_governments: int = 0,
+    require_full_fiscal_year: bool = False,
+    require_local_parquet: bool = False,
 ) -> DatasetReadiness:
     row = session.execute(
         select(DatasetDefinition, DatasetRelease)
@@ -83,22 +94,31 @@ def _dataset_release_status(
             row_count=0,
             government_count=0,
             parquet_objects=0,
+            local_parquet_objects=0,
+            full_fiscal_year=False,
             ready=False,
         )
 
     dataset, release = row
-    parquet_objects = session.scalar(
-        select(func.count(BulkObject.id)).where(
+    objects = session.scalars(
+        select(BulkObject).where(
             BulkObject.dataset_release_id == release.id,
             BulkObject.storage_format == "PARQUET",
         )
-    ) or 0
+    ).all()
+    lake_root = LakeStore().root
+    local_objects = sum(1 for obj in objects if (lake_root / obj.object_key).exists())
+    request = (release.metadata_json or {}).get("download_request") or {}
+    filters = request.get("filters") or {}
+    full_fiscal_year = str(filters.get("period") or "") == "12"
     row_count = int(release.row_count or 0)
     government_count = int(release.government_count or 0)
     ready = (
         release.status == "READY"
         and row_count >= min_rows
         and government_count >= min_governments
+        and (not require_full_fiscal_year or full_fiscal_year)
+        and (not require_local_parquet or (len(objects) > 0 and local_objects == len(objects)))
     )
     return DatasetReadiness(
         dataset_key=dataset.key,
@@ -107,7 +127,9 @@ def _dataset_release_status(
         coverage_type=release.coverage_type,
         row_count=row_count,
         government_count=government_count,
-        parquet_objects=int(parquet_objects),
+        parquet_objects=len(objects),
+        local_parquet_objects=local_objects,
+        full_fiscal_year=full_fiscal_year,
         ready=ready,
     )
 
@@ -160,6 +182,16 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
         dataset_key="census-gov-finance-2024",
         release_key="FY2024",
     )
+    account_statuses = {
+        key: _dataset_release_status(
+            session,
+            dataset_key=f"usaspending-file-{key.lower()}",
+            release_key=f"FY{federal_fiscal_year}",
+            require_full_fiscal_year=True,
+            require_local_parquet=True,
+        )
+        for key in ("A", "B", "C")
+    }
     real_omb_rows = _real_omb_account_rows(session, federal_fiscal_year)
     real_treasury_rows = _real_treasury_rows(session, federal_fiscal_year)
     fixture_snapshots = int(
@@ -174,7 +206,11 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
         real_omb_rows >= MIN_REAL_OMB_ACCOUNT_ROWS
         and real_treasury_rows >= MIN_REAL_TREASURY_ROWS
     )
-    if national_ready and federal_ready:
+    account_detail_ready = account_statuses["B"].ready and account_statuses["C"].ready
+
+    if national_ready and federal_ready and account_detail_ready:
+        mode = "NATIONAL_REAL_DATA_WITH_FEDERAL_DETAIL"
+    elif national_ready and federal_ready:
         mode = "NATIONAL_REAL_DATA"
     elif national_ready:
         mode = "NATIONAL_STATE_LOCAL_WITH_LIMITED_FEDERAL"
@@ -194,11 +230,19 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
             "The federal core is not backed by a full real OMB + Treasury ingestion for FY"
             f"{federal_fiscal_year}; fixture-scale federal detail may still be visible."
         )
+    if not account_detail_ready:
+        warnings.append(
+            "Full-year USAspending File B/C account detail is not queryable on this runtime. "
+            "Program-activity/object-class and award-financial drilldown will remain limited."
+        )
     if census_2022.ready and census_2022.parquet_objects == 0:
         warnings.append(
             "The 2022 Census relational baseline is READY but no normalized Parquet mirror is registered."
         )
-    if fixture_snapshots and mode != "NATIONAL_REAL_DATA":
+    if fixture_snapshots and mode not in {
+        "NATIONAL_REAL_DATA",
+        "NATIONAL_REAL_DATA_WITH_FEDERAL_DETAIL",
+    }:
         warnings.append(
             f"{fixture_snapshots} fixture source snapshots are present. Fixture data is for deterministic "
             "tests/demos and should not be mistaken for national product coverage."
@@ -208,9 +252,13 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
         mode=mode,
         national_state_local_ready=national_ready,
         federal_core_ready=federal_ready,
+        federal_account_detail_ready=account_detail_ready,
         government_registry=registry,
         census_finance_2022=census_2022,
         census_finance_2024=census_2024,
+        usaspending_file_a=account_statuses["A"],
+        usaspending_file_b=account_statuses["B"],
+        usaspending_file_c=account_statuses["C"],
         real_omb_account_rows=real_omb_rows,
         real_treasury_rows=real_treasury_rows,
         fixture_snapshot_count=fixture_snapshots,
@@ -218,7 +266,13 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
     )
 
 
-def _materialize_census_parquet(session: Session, *, year: int, dataset_key: str, source_path: Path) -> dict | None:
+def _materialize_census_parquet(
+    session: Session,
+    *,
+    year: int,
+    dataset_key: str,
+    source_path: Path,
+) -> dict | None:
     release = session.execute(
         select(DatasetRelease)
         .join(DatasetDefinition, DatasetRelease.dataset_id == DatasetDefinition.id)
@@ -246,12 +300,58 @@ def _materialize_census_parquet(session: Session, *, year: int, dataset_key: str
     )
 
 
+def _activate_federal_accounts(session: Session, *, fiscal_year: int) -> dict:
+    payload = {
+        "account_level": "treasury_account",
+        "file_format": "csv",
+        "filters": {
+            "agency": "all",
+            "fy": str(fiscal_year),
+            "period": "12",
+            "submission_types": [
+                "account_balances",
+                "object_class_program_activity",
+                "award_financial",
+            ],
+        },
+    }
+    client = USASpendingBulkClient()
+    job = client.submit("accounts", payload)
+    response = client.wait(job)
+    url = response.get("file_url") or response.get("download_url") or response.get("url")
+    if not url:
+        raise RuntimeError(f"Completed USAspending account download has no URL: {response}")
+    destination = (
+        get_settings().raw_data_dir
+        / "usaspending"
+        / str(fiscal_year)
+        / Path(url.split("?", 1)[0]).name
+    )
+    client.download_completed(response, destination)
+    result = materialize_account_archive(
+        session,
+        destination,
+        fiscal_year=fiscal_year,
+        request=payload,
+    )
+    return {
+        "request": payload,
+        "download": {
+            "file_name": response.get("file_name") or response.get("filename"),
+            "status": response.get("status") or response.get("state"),
+            "local_path": str(destination),
+        },
+        "warehouse": result,
+    }
+
+
 def activate_product_data(
     session: Session,
     *,
     federal_fiscal_year: int = 2025,
     include_2024_sample: bool = True,
     include_federal_core: bool = True,
+    include_federal_accounts: bool = True,
     overwrite_downloads: bool = False,
 ) -> dict:
     """Populate the substantive public-data baseline, skipping already-ready expensive work."""
@@ -320,6 +420,16 @@ def activate_product_data(
         }
         actions["federal_core"] = federal_actions
 
+    if include_federal_accounts:
+        current = product_data_readiness(session, federal_fiscal_year=federal_fiscal_year)
+        if current.federal_account_detail_ready:
+            actions["federal_accounts"] = {"status": "already_ready"}
+        else:
+            actions["federal_accounts"] = _activate_federal_accounts(
+                session,
+                fiscal_year=federal_fiscal_year,
+            )
+
     after = product_data_readiness(session, federal_fiscal_year=federal_fiscal_year)
     return {
         "before": before.to_dict(),
@@ -335,6 +445,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--federal-fiscal-year", type=int, default=2025)
     parser.add_argument("--no-2024-sample", action="store_true")
     parser.add_argument("--skip-federal-core", action="store_true")
+    parser.add_argument("--skip-federal-accounts", action="store_true")
     parser.add_argument("--overwrite-downloads", action="store_true")
     parser.add_argument(
         "--status-only",
@@ -358,6 +469,7 @@ def main(argv: list[str] | None = None) -> int:
                 federal_fiscal_year=args.federal_fiscal_year,
                 include_2024_sample=not args.no_2024_sample,
                 include_federal_core=not args.skip_federal_core,
+                include_federal_accounts=not args.skip_federal_accounts,
                 overwrite_downloads=args.overwrite_downloads,
             )
     print(json.dumps(result, indent=2, default=str))
