@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
@@ -16,6 +17,7 @@ from taxtrace.warehouse_v2.catalog import seed_catalog
 from taxtrace.warehouse_v2.federal_search import FederalSearchV2Engine
 from taxtrace.warehouse_v2.lake import LakeStore
 from taxtrace.warehouse_v2.usaspending_award_lake import materialize_award_archive
+from taxtrace.warehouse_v2.usaspending_awards import build_award_bulk_payload
 from taxtrace.warehouse_v2.usaspending_lake import materialize_account_archive
 
 
@@ -154,21 +156,36 @@ def _award_archive(path: Path, fiscal_year: int = 2022) -> None:
         )
 
 
-def _materialize(db_session, tmp_path: Path, *, full_year: bool = True) -> LakeStore:
+def _materialize(
+    db_session,
+    tmp_path: Path,
+    *,
+    full_year: bool = True,
+    agency: int | str = "all",
+) -> LakeStore:
     seed_catalog(db_session)
-    archive_path = tmp_path / ("full.zip" if full_year else "slice.zip")
+    archive_path = tmp_path / (
+        "full.zip" if full_year and agency == "all" else "scoped-or-slice.zip"
+    )
     _award_archive(archive_path)
-    lake = LakeStore(root=tmp_path / ("lake-full" if full_year else "lake-slice"))
-    date_range = (
-        {"start_date": "2021-10-01", "end_date": "2022-09-30"}
+    lake = LakeStore(root=tmp_path / (
+        "lake-full" if full_year and agency == "all" else "lake-scoped-or-slice"
+    ))
+    request = (
+        build_award_bulk_payload(2022, agency=agency)
         if full_year
-        else {"start_date": "2022-03-01", "end_date": "2022-03-01"}
+        else build_award_bulk_payload(
+            2022,
+            agency=agency,
+            start_date=date(2022, 3, 1),
+            end_date=date(2022, 3, 1),
+        )
     )
     materialize_award_archive(
         db_session,
         archive_path,
         fiscal_year=2022,
-        request={"filters": {"date_range": date_range}},
+        request=request,
         lake=lake,
     )
     return lake
@@ -283,11 +300,7 @@ def _materialize_personalized_stack(db_session, tmp_path: Path, monkeypatch) -> 
         db_session,
         award_path,
         fiscal_year=2025,
-        request={
-            "filters": {
-                "date_range": {"start_date": "2024-10-01", "end_date": "2025-09-30"}
-            }
-        },
+        request=build_award_bulk_payload(2025),
         lake=lake,
     )
     return lake
@@ -394,6 +407,19 @@ def test_search_uses_only_full_year_award_releases(db_session, tmp_path: Path) -
     assert result.prime_coverage.status == "NO_FULL_YEAR_RELEASE"
     assert result.subaward_coverage.status == "NO_FULL_YEAR_RELEASE"
     assert any("incomplete" in warning for warning in result.warnings)
+
+
+def test_search_refuses_full_year_single_agency_release(db_session, tmp_path: Path) -> None:
+    lake = _materialize(db_session, tmp_path, full_year=True, agency=12)
+    result = FederalSearchV2Engine(lake=lake).search(
+        db_session,
+        fiscal_year=2022,
+        query="Acme",
+    )
+
+    assert result.results == []
+    assert result.prime_coverage.status == "NO_FULL_YEAR_RELEASE"
+    assert result.subaward_coverage.status == "NO_FULL_YEAR_RELEASE"
 
 
 def test_search_rejects_unknown_entity_type(db_session, tmp_path: Path) -> None:
