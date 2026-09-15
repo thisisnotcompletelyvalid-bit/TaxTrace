@@ -33,51 +33,97 @@ jobs:
           ):
               stream_download(url, root / name, overwrite=True)
           PY
-      - name: Inspect GS00LOCALFIN archive and candidate 2022 records
+      - name: Reconcile unit sums, state-type controls, and current GS00LOCALFIN
         run: |
           python - <<'PY'
           import csv
           import io
+          from collections import defaultdict
+          from decimal import Decimal
           from pathlib import Path
           from zipfile import ZipFile
 
+          from taxtrace.warehouse_v2.census import iter_finance_records
+
           root = Path('/tmp/taxtrace-census')
-          archive_path = root / 'GS00LOCALFIN.zip'
-          with ZipFile(archive_path) as archive:
-              print('GS00LOCALFIN_MEMBERS')
-              for member in archive.infolist():
-                  print('MEMBER', member.filename, member.file_size, member.compress_size)
-                  if member.is_dir():
-                      continue
-                  raw = archive.read(member)
-                  text = raw.decode('utf-8-sig', errors='replace')
-                  lines = text.splitlines()
-                  print('LINE_COUNT', member.filename, len(lines))
-                  for index, line in enumerate(lines[:40], start=1):
-                      print('FIRST_LINE', member.filename, index, len(line), repr(line[:600]))
+          source = root / '2022_Individual_Unit_File.zip'
+          suffixes = (
+              '01','03','04','05','12','16','18','21','22','23','24','25','26','29','31','32','36',
+              '44','45','50','52','55','56','59','60','61','62','66','77','79','80','81','85','87','89',
+          )
+          codes = frozenset({f'{prefix}{suffix}' for prefix in ('E', 'F') for suffix in suffixes} | {'I89', 'J19'})
+          assert len(codes) == 72
 
-                  if not lines:
-                      continue
-                  sample = '\n'.join(lines[:20])
-                  try:
-                      dialect = csv.Sniffer().sniff(sample, delimiters=',|\t;')
-                      print('SNIFFED_DELIMITER', member.filename, repr(dialect.delimiter))
-                      reader = csv.reader(io.StringIO(text), dialect)
-                      for index, row in enumerate(reader):
-                          if index >= 15:
-                              break
-                          print('PARSED_ROW', member.filename, index + 1, row[:40])
-                  except Exception as exc:
-                      print('SNIFFER_FAILED', member.filename, repr(exc))
+          raw = defaultdict(lambda: Decimal('0'))
+          for record in iter_finance_records(source):
+              raw[record.item_code.upper()] += record.amount_dollars
 
-                  print('LINES_WITH_2022_AND_DIRECT')
-                  matches = 0
-                  for index, line in enumerate(lines, start=1):
-                      lowered = line.lower()
-                      if '2022' in line and ('direct general' in lowered or 'general expenditure' in lowered or 'fire protection' in lowered):
-                          print('MATCH', member.filename, index, repr(line[:1000]))
-                          matches += 1
-                          if matches >= 50:
-                              break
-                  print('MATCH_COUNT_PRINTED', matches)
+          with ZipFile(source) as archive:
+              state_type_name = next(name for name in archive.namelist() if name.endswith('22statetypepu.txt'))
+              lines = archive.read(state_type_name).decode('utf-8-sig', errors='replace').splitlines()
+
+          public = defaultdict(lambda: Decimal('0'))
+          for line in lines:
+              if len(line) < 20 or line[:3] != '001':
+                  continue
+              code = line[4:7].strip().upper()
+              try:
+                  public[code] += Decimal(line[7:20].strip()) * Decimal('1000')
+              except Exception:
+                  pass
+
+          with ZipFile(root / 'GS00LOCALFIN.zip') as archive:
+              data_name = next(name for name in archive.namelist() if name.endswith('.dat'))
+              text = archive.read(data_name).decode('utf-8-sig', errors='replace')
+          reader = csv.DictReader(io.StringIO(text), delimiter='|')
+          controls = {}
+          for row in reader:
+              if row['YEAR'] != '2022' or row['ST'] != '00' or row['GOVTYPE'] != '001':
+                  continue
+              if row['AGG_DESC'] in {'LF0103', 'LF0104', 'LF0105', 'LF0106'}:
+                  controls[row['AGG_DESC']] = Decimal(row['AMOUNT']) * Decimal('1000')
+
+          raw_parent = sum((raw[code] for code in codes), Decimal('0'))
+          public_parent = sum((public[code] for code in codes), Decimal('0'))
+          raw_current = sum((raw[code] for code in codes if code.startswith('E')), Decimal('0'))
+          public_current = sum((public[code] for code in codes if code.startswith('E')), Decimal('0'))
+          raw_capital = sum((raw[code] for code in codes if code.startswith('F')), Decimal('0'))
+          public_capital = sum((public[code] for code in codes if code.startswith('F')), Decimal('0'))
+          raw_other = raw['I89'] + raw['J19']
+          public_other = public['I89'] + public['J19']
+
+          print('RECONCILIATION', {
+              'raw_parent': str(raw_parent),
+              'public_parent': str(public_parent),
+              'gs_parent': str(controls['LF0103']),
+              'raw_vs_gs': str(raw_parent - controls['LF0103']),
+              'public_vs_gs': str(public_parent - controls['LF0103']),
+              'relative_raw_gap': str((controls['LF0103'] - raw_parent) / controls['LF0103']),
+          })
+          print('COMPONENTS', {
+              'raw_current': str(raw_current),
+              'public_current': str(public_current),
+              'gs_current': str(controls['LF0104']),
+              'raw_capital': str(raw_capital),
+              'public_capital': str(public_capital),
+              'gs_capital': str(controls['LF0105']),
+              'raw_other': str(raw_other),
+              'public_other': str(public_other),
+              'gs_other': str(controls['LF0106']),
+          })
+
+          print('CODE_LEVEL_RAW_TO_PUBLIC_DIFFERENCES')
+          differences = []
+          for code in sorted(codes):
+              diff = public[code] - raw[code]
+              if diff:
+                  differences.append((abs(diff), code, raw[code], public[code], diff))
+          for _, code, raw_amount, public_amount, diff in sorted(differences, reverse=True):
+              print('CODE_DIFF', code, 'raw', raw_amount, 'public', public_amount, 'public_minus_raw', diff)
+
+          assert public_parent == controls['LF0103'], (public_parent, controls['LF0103'])
+          assert public_current == controls['LF0104'], (public_current, controls['LF0104'])
+          assert public_capital == controls['LF0105'], (public_capital, controls['LF0105'])
+          assert public_other == controls['LF0106'], (public_other, controls['LF0106'])
+          assert abs(controls['LF0103'] - raw_parent) < Decimal('100000000')
           PY
