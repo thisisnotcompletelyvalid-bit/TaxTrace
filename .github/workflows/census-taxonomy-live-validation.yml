@@ -1,0 +1,107 @@
+name: Census Taxonomy Live Validation
+
+on:
+  push:
+    branches:
+      - census-additive-taxonomy
+    paths:
+      - '.github/workflows/census-taxonomy-live-validation.yml'
+  workflow_dispatch:
+
+jobs:
+  reconcile-2022:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - name: Download official 2022 Census finance files
+        run: |
+          mkdir -p /tmp/taxtrace-census
+          python - <<'PY'
+          from pathlib import Path
+          from taxtrace.warehouse_v2.download import stream_download
+
+          root = Path('/tmp/taxtrace-census')
+          stream_download(
+              'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip',
+              root / '2022_Individual_Unit_File.zip',
+              overwrite=True,
+          )
+          stream_download(
+              'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx',
+              root / '22slsstab1.xlsx',
+              overwrite=True,
+          )
+          PY
+      - name: Compute TaxTrace 2022 direct-general aggregate and inspect published control rows
+        run: |
+          python - <<'PY'
+          from collections import Counter, defaultdict
+          from decimal import Decimal
+          from pathlib import Path
+
+          from openpyxl import load_workbook
+
+          from taxtrace.warehouse_v2.census import iter_finance_records
+          from taxtrace.warehouse_v2.census_taxonomy import (
+              POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES,
+              taxonomy_audit,
+          )
+
+          root = Path('/tmp/taxtrace-census')
+          source = root / '2022_Individual_Unit_File.zip'
+          workbook_path = root / '22slsstab1.xlsx'
+
+          totals = defaultdict(lambda: Decimal('0.00'))
+          records = 0
+          governments = set()
+          code_counts = Counter()
+          for record in iter_finance_records(source):
+              records += 1
+              governments.add(record.government_id)
+              code = record.item_code.upper()
+              code_counts[code] += 1
+              if code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES:
+                  totals[code] += record.amount_dollars
+
+          direct_general = sum(totals.values(), Decimal('0.00'))
+          audit = taxonomy_audit(2022)
+          assert audit['valid'], audit
+          assert records >= 1_000_000, records
+          assert len(governments) >= 50_000, len(governments)
+          assert direct_general > 0, direct_general
+
+          print('TAXTRACE_AGGREGATE', {
+              'records': records,
+              'governments': len(governments),
+              'direct_general_dollars': str(direct_general),
+              'active_codes_present': len([code for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES if code_counts[code]]),
+              'active_codes_missing': sorted(code for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES if not code_counts[code]),
+              'historical_g_rows': sum(count for code, count in code_counts.items() if code.startswith('G')),
+              'historical_k_rows': sum(count for code, count in code_counts.items() if code.startswith('K')),
+              'j67_rows': code_counts['J67'],
+              'j68_rows': code_counts['J68'],
+              'j85_rows': code_counts['J85'],
+              'e27_rows': code_counts['E27'],
+          })
+
+          workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+          print('WORKBOOK_SHEETS', workbook.sheetnames)
+          matches = []
+          for sheet in workbook.worksheets:
+              for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+                  values = list(row)
+                  text = ' | '.join(str(value) for value in values if value is not None)
+                  normalized = text.lower().replace('-', ' ')
+                  if 'direct general' in normalized or 'general expenditure' in normalized:
+                      matches.append((sheet.title, row_index, values))
+          print('DIRECT_GENERAL_MATCH_COUNT', len(matches))
+          for match in matches[:100]:
+              print('DIRECT_GENERAL_MATCH', match)
+          assert matches, 'No Direct General Expenditure control row was found in 22slsstab1.xlsx'
+          PY
