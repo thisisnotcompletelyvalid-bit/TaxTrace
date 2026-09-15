@@ -1,5 +1,6 @@
 import csv
 import io
+from datetime import date
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -7,6 +8,7 @@ from taxtrace.warehouse_v2.catalog import seed_catalog
 from taxtrace.warehouse_v2.federal_award_detail import FederalAwardDetailEngine
 from taxtrace.warehouse_v2.lake import LakeStore
 from taxtrace.warehouse_v2.usaspending_award_lake import materialize_award_archive
+from taxtrace.warehouse_v2.usaspending_awards import build_award_bulk_payload
 
 
 def _csv_text(header: list[str], rows: list[list[str]]) -> str:
@@ -138,20 +140,32 @@ def _write_award_archive(path: Path) -> None:
         )
 
 
-def _materialize(db_session, tmp_path: Path, *, full_year: bool) -> LakeStore:
+def _materialize(
+    db_session,
+    tmp_path: Path,
+    *,
+    full_year: bool,
+    agency: int | str = "all",
+) -> LakeStore:
     seed_catalog(db_session)
     archive = tmp_path / ("awards-full.zip" if full_year else "awards-slice.zip")
     _write_award_archive(archive)
     lake = LakeStore(root=tmp_path / "lake")
-    if full_year:
-        date_range = {"start_date": "2024-10-01", "end_date": "2025-09-30"}
-    else:
-        date_range = {"start_date": "2025-03-01", "end_date": "2025-03-07"}
+    request = (
+        build_award_bulk_payload(2025, agency=agency)
+        if full_year
+        else build_award_bulk_payload(
+            2025,
+            agency=agency,
+            start_date=date(2025, 3, 1),
+            end_date=date(2025, 3, 7),
+        )
+    )
     materialize_award_archive(
         db_session,
         archive,
         fiscal_year=2025,
-        request={"filters": {"date_range": date_range}},
+        request=request,
         lake=lake,
     )
     return lake
@@ -196,6 +210,23 @@ def test_award_detail_does_not_promote_partial_download_to_full_year_coverage(
     db_session, tmp_path
 ):
     lake = _materialize(db_session, tmp_path, full_year=False)
+
+    result = FederalAwardDetailEngine(lake=lake).get(
+        db_session,
+        fiscal_year=2025,
+        award_identity="AWARD-A",
+    )
+
+    assert result.prime_coverage.status == "NO_FULL_YEAR_RELEASE"
+    assert result.subaward_coverage.status == "NO_FULL_YEAR_RELEASE"
+    assert result.prime is None
+    assert result.subawards == []
+
+
+def test_award_detail_does_not_promote_single_agency_full_year_to_federal_coverage(
+    db_session, tmp_path
+):
+    lake = _materialize(db_session, tmp_path, full_year=True, agency=12)
 
     result = FederalAwardDetailEngine(lake=lake).get(
         db_session,
