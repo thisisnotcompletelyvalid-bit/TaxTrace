@@ -1,4 +1,4 @@
-.PHONY: install bootstrap test lint api migrate seed demo-fixtures ingest-usaspending ingest-omb ingest-treasury
+.PHONY: install bootstrap test lint api migrate seed demo-fixtures ingest-usaspending ingest-omb ingest-treasury activate-product data-status
 
 install:
 	python -m pip install -e '.[dev]'
@@ -19,6 +19,12 @@ test:
 
 lint:
 	ruff check src apps tests
+
+activate-product: migrate
+	python -m taxtrace.warehouse_v2.product_activation
+
+data-status:
+	python -m taxtrace.warehouse_v2.product_activation --status-only
 
 demo-fixtures:
 	taxtrace warehouse ingest-fixtures
