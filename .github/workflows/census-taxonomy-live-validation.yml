@@ -19,7 +19,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
-      - name: Download official Census source files
+      - name: Download current Census revision files
         run: |
           mkdir -p /tmp/taxtrace-census
           python - <<'PY'
@@ -28,71 +28,56 @@ jobs:
 
           root = Path('/tmp/taxtrace-census')
           for url, name in (
-              ('https://www2.census.gov/programs-surveys/state/technical-documentation/methodology/methodology_summary_tabulations.xlsx', 'methodology_summary_tabulations.xlsx'),
-              ('https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx', '22slsstab1.xlsx'),
+              ('https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip', '2022_Individual_Unit_File.zip'),
+              ('https://www2.census.gov/programs-surveys/gov-finances/data/GS00LOCALFIN.zip', 'GS00LOCALFIN.zip'),
           ):
               stream_download(url, root / name, overwrite=True)
           PY
-      - name: Compare published function rows with summary methodology
+      - name: Inspect GS00LOCALFIN archive and candidate 2022 records
         run: |
           python - <<'PY'
-          from decimal import Decimal
+          import csv
+          import io
           from pathlib import Path
-
-          from openpyxl import load_workbook
+          from zipfile import ZipFile
 
           root = Path('/tmp/taxtrace-census')
-          published = load_workbook(root / '22slsstab1.xlsx', read_only=True, data_only=True)
-          p = published[published.sheetnames[0]]
-          method = load_workbook(root / 'methodology_summary_tabulations.xlsx', read_only=True, data_only=True)
-          m = method['Summary Tabulations']
+          archive_path = root / 'GS00LOCALFIN.zip'
+          with ZipFile(archive_path) as archive:
+              print('GS00LOCALFIN_MEMBERS')
+              for member in archive.infolist():
+                  print('MEMBER', member.filename, member.file_size, member.compress_size)
+                  if member.is_dir():
+                      continue
+                  raw = archive.read(member)
+                  text = raw.decode('utf-8-sig', errors='replace')
+                  lines = text.splitlines()
+                  print('LINE_COUNT', member.filename, len(lines))
+                  for index, line in enumerate(lines[:40], start=1):
+                      print('FIRST_LINE', member.filename, index, len(line), repr(line[:600]))
 
-          print('PUBLISHED_MATCHES')
-          needles = (
-              'fire',
-              'utility',
-              'utilities',
-              'liquor',
-              'direct general',
-              'direct expenditure',
-              'general expenditure',
-              'interest on debt',
-              'assistance and subsidies',
-          )
-          for row_index, row in enumerate(p.iter_rows(values_only=True), start=1):
-              values = list(row)
-              description = str(values[1] or '').strip().lower() if len(values) > 1 else ''
-              if any(needle in description for needle in needles):
-                  print('PUBLISHED_MATCH', row_index, values[:8])
+                  if not lines:
+                      continue
+                  sample = '\n'.join(lines[:20])
+                  try:
+                      dialect = csv.Sniffer().sniff(sample, delimiters=',|\t;')
+                      print('SNIFFED_DELIMITER', member.filename, repr(dialect.delimiter))
+                      reader = csv.reader(io.StringIO(text), dialect)
+                      for index, row in enumerate(reader):
+                          if index >= 15:
+                              break
+                          print('PARSED_ROW', member.filename, index + 1, row[:40])
+                  except Exception as exc:
+                      print('SNIFFER_FAILED', member.filename, repr(exc))
 
-          print('PUBLISHED_FUNCTION_BLOCK')
-          for row_index in range(90, 170):
-              values = list(next(p.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))
-              if len(values) > 2 and values[1] not in (None, ''):
-                  print('PUBLISHED_FUNCTION', row_index, values[0], str(values[1]).strip(), values[2], values[4], values[5])
-
-          print('METHODOLOGY_EXPENDITURE_ROWS')
-          for row_index, row in enumerate(m.iter_rows(values_only=True), start=1):
-              values = list(row)
-              description = str(values[2] or '') if len(values) > 2 else ''
-              lowered = description.lower()
-              if any(
-                  needle in lowered
-                  for needle in (
-                      'total expenditure',
-                      'total general expenditure',
-                      'utility',
-                      'liquor',
-                      'fire',
-                  )
-              ):
-                  print('METHOD_ROW', row_index, values[:13])
-
-          direct_total = Decimal(str(p['C90'].value)) * Decimal('1000')
-          direct_general = Decimal(str(p['C91'].value)) * Decimal('1000')
-          print('DIRECT_SECTOR_DIFFERENCE', {
-              'direct_expenditure_by_function': str(direct_total),
-              'direct_general_expenditure': str(direct_general),
-              'difference': str(direct_total - direct_general),
-          })
+                  print('LINES_WITH_2022_AND_DIRECT')
+                  matches = 0
+                  for index, line in enumerate(lines, start=1):
+                      lowered = line.lower()
+                      if '2022' in line and ('direct general' in lowered or 'general expenditure' in lowered or 'fire protection' in lowered):
+                          print('MATCH', member.filename, index, repr(line[:1000]))
+                          matches += 1
+                          if matches >= 50:
+                              break
+                  print('MATCH_COUNT_PRINTED', matches)
           PY
