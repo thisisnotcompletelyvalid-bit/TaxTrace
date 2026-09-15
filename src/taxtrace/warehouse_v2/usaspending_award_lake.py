@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import json
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,6 +17,46 @@ from taxtrace.warehouse_v2.lake import LakeStore
 
 PRIME_DATASET = "usaspending-file-d1-d2"
 SUBAWARD_DATASET = "usaspending-file-f"
+
+# Complete award-family selections used by the official TaxTrace Custom Award
+# Data Download request. Nonstandard subsets receive scoped release identities
+# and cannot masquerade as federal-wide annual product coverage.
+PRIME_AWARD_TYPES = (
+    "A",
+    "B",
+    "C",
+    "D",
+    "IDV_A",
+    "IDV_B",
+    "IDV_B_A",
+    "IDV_B_B",
+    "IDV_B_C",
+    "IDV_C",
+    "IDV_D",
+    "IDV_E",
+    "02",
+    "03",
+    "04",
+    "05",
+    "06",
+    "07",
+    "08",
+    "09",
+    "10",
+    "11",
+    "-1",
+    "F001",
+    "F002",
+    "F003",
+    "F004",
+    "F005",
+    "F006",
+    "F007",
+    "F008",
+    "F009",
+    "F010",
+)
+SUBAWARD_TYPES = ("grant", "procurement")
 
 
 @dataclass(frozen=True)
@@ -33,6 +75,8 @@ class AwardReleaseIdentity:
     coverage_type: str
     start_date: str
     end_date: str
+    scope_complete: bool
+    scope_key: str
 
 
 def classify_award_columns(columns: list[str] | tuple[str, ...]) -> tuple[str, str]:
@@ -125,6 +169,50 @@ def _request_date_range(request: dict | None) -> tuple[str | None, str | None]:
     return None, None
 
 
+def _normalized_type_set(value: object) -> set[str] | None:
+    if not isinstance(value, (list, tuple, set)):
+        return None
+    return {str(item) for item in value}
+
+
+def _request_scope(request: dict | None) -> tuple[bool, str]:
+    """Return whether the request represents complete federal award-family coverage.
+
+    Date coverage is handled separately. This function prevents an agency-limited
+    or award-type-limited full-year archive from receiving the same release key as
+    the all-agency complete annual product release.
+    """
+    filters = request.get("filters") if isinstance(request, dict) else None
+    if not isinstance(filters, dict):
+        scope_payload = {"agency": None, "prime_award_types": None, "sub_award_types": None}
+        digest = hashlib.sha256(
+            json.dumps(scope_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()[:12]
+        return False, digest
+
+    agency = filters.get("agency")
+    prime_types = _normalized_type_set(filters.get("prime_award_types"))
+    subaward_types = _normalized_type_set(filters.get("sub_award_types"))
+
+    agency_complete = isinstance(agency, str) and agency.casefold() == "all"
+    requested_family_count = int(prime_types is not None) + int(subaward_types is not None)
+    type_scope_complete = requested_family_count > 0
+    if prime_types is not None:
+        type_scope_complete = type_scope_complete and prime_types == set(PRIME_AWARD_TYPES)
+    if subaward_types is not None:
+        type_scope_complete = type_scope_complete and subaward_types == set(SUBAWARD_TYPES)
+
+    scope_payload = {
+        "agency": agency,
+        "prime_award_types": sorted(prime_types) if prime_types is not None else None,
+        "sub_award_types": sorted(subaward_types) if subaward_types is not None else None,
+    }
+    digest = hashlib.sha256(
+        json.dumps(scope_payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()[:12]
+    return agency_complete and type_scope_complete, digest
+
+
 def award_release_identity(fiscal_year: int, request: dict | None) -> AwardReleaseIdentity:
     if request is None:
         raise ValueError(
@@ -139,21 +227,50 @@ def award_release_identity(fiscal_year: int, request: dict | None) -> AwardRelea
             "USAspending award request must provide both start_date and end_date for provenance"
         )
 
-    if start == full_start and end == full_end:
+    scope_complete, scope_key = _request_scope(request)
+    full_year = start == full_start and end == full_end
+
+    if full_year and scope_complete:
         return AwardReleaseIdentity(
             release_key=f"FY{fiscal_year}",
             reference_period=f"FY{fiscal_year}",
             coverage_type="FEDERAL_AWARD",
             start_date=start,
             end_date=end,
+            scope_complete=True,
+            scope_key=scope_key,
+        )
+
+    if full_year:
+        return AwardReleaseIdentity(
+            release_key=f"FY{fiscal_year}_SCOPE_{scope_key}",
+            reference_period=f"FY{fiscal_year} scoped {scope_key}",
+            coverage_type="FEDERAL_AWARD_SCOPED",
+            start_date=start,
+            end_date=end,
+            scope_complete=False,
+            scope_key=scope_key,
+        )
+
+    if scope_complete:
+        return AwardReleaseIdentity(
+            release_key=f"FY{fiscal_year}_{start}_{end}",
+            reference_period=f"{start}/{end}",
+            coverage_type="FEDERAL_AWARD_SLICE",
+            start_date=start,
+            end_date=end,
+            scope_complete=True,
+            scope_key=scope_key,
         )
 
     return AwardReleaseIdentity(
-        release_key=f"FY{fiscal_year}_{start}_{end}",
-        reference_period=f"{start}/{end}",
-        coverage_type="FEDERAL_AWARD_SLICE",
+        release_key=f"FY{fiscal_year}_{start}_{end}_SCOPE_{scope_key}",
+        reference_period=f"{start}/{end} scoped {scope_key}",
+        coverage_type="FEDERAL_AWARD_SCOPED_SLICE",
         start_date=start,
         end_date=end,
+        scope_complete=False,
+        scope_key=scope_key,
     )
 
 
@@ -196,6 +313,8 @@ def _release(
         "start_date": identity.start_date,
         "end_date": identity.end_date,
     }
+    metadata["award_scope_complete"] = identity.scope_complete
+    metadata["award_scope_key"] = identity.scope_key
     row.metadata_json = metadata
     row.status = "MATERIALIZING"
     row.reference_period = identity.reference_period
@@ -214,8 +333,9 @@ def materialize_award_archive(
     """Materialize prime D1/D2-shaped award data and File F-shaped subawards.
 
     The exact upstream request is required because the archive itself does not
-    prove its date coverage. Full fiscal years and partial slices therefore get
-    distinct immutable release identities.
+    prove its date or agency/type coverage. Complete federal years, scoped
+    full years, and partial slices therefore receive distinct immutable release
+    identities.
     """
     lake = lake or LakeStore()
     identity = award_release_identity(fiscal_year, request)
@@ -329,6 +449,8 @@ def materialize_award_archive(
                     "native_data_classes": sorted({member.data_class for member in members}),
                     "parquet_objects": parquet_objects,
                     "grain_is_additive_with_other_dataset_grains": False,
+                    "award_scope_complete": identity.scope_complete,
+                    "award_scope_key": identity.scope_key,
                 }
             )
             release.metadata_json = metadata
@@ -336,6 +458,8 @@ def materialize_award_archive(
             results[dataset_key] = {
                 "release_key": identity.release_key,
                 "coverage_type": identity.coverage_type,
+                "scope_complete": identity.scope_complete,
+                "scope_key": identity.scope_key,
                 "rows": total_rows,
                 "members": len(members),
                 "parts": part_results,
@@ -346,5 +470,8 @@ def materialize_award_archive(
         "archive": str(zip_path),
         "fiscal_year": fiscal_year,
         "release_key": identity.release_key,
+        "coverage_type": identity.coverage_type,
+        "scope_complete": identity.scope_complete,
+        "scope_key": identity.scope_key,
         "datasets": results,
     }
