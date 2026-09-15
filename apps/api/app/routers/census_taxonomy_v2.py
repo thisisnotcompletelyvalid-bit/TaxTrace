@@ -9,11 +9,11 @@ from taxtrace.db_models import Jurisdiction
 from taxtrace.warehouse_v2.census_partition import load_government_expenditure_partition
 from taxtrace.warehouse_v2.census_taxonomy import (
     CATEGORIES,
-    CENSUS_SUMMARY_METHODOLOGY_URL,
-    DIRECT_GENERAL_EXPENDITURE_CODES,
     PARENT_KEY,
     PARENT_LABEL,
+    SUPPORTED_FISCAL_YEARS,
     TAXONOMY_VERSION,
+    formula_for_year,
     taxonomy_audit,
 )
 from taxtrace.warehouse_v2.db_models import GovernmentFinanceFact
@@ -22,19 +22,30 @@ router = APIRouter(prefix="/data", tags=["census-taxonomy-v2"])
 
 
 @router.get("/census-taxonomy")
-def census_taxonomy() -> dict:
-    audit = taxonomy_audit()
+def census_taxonomy(fiscal_year: int = 2022) -> dict:
+    try:
+        formula = formula_for_year(fiscal_year)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    audit = taxonomy_audit(fiscal_year)
     return {
         "taxonomy_version": TAXONOMY_VERSION,
-        "source": {
-            "authority": "U.S. Census Bureau",
-            "name": "State and Local Government Finances: Methodology for Summary Tabulations",
-            "url": CENSUS_SUMMARY_METHODOLOGY_URL,
-        },
+        "formula_key": formula.key,
+        "formula_label": formula.label,
+        "fiscal_year": fiscal_year,
+        "supported_fiscal_years": sorted(SUPPORTED_FISCAL_YEARS),
+        "sources": [
+            {
+                "authority": "U.S. Census Bureau",
+                "url": url,
+            }
+            for url in formula.source_urls
+        ],
+        "formula_notes": list(formula.notes),
         "parent": {
             "key": PARENT_KEY,
             "label": PARENT_LABEL,
-            "native_item_codes": sorted(DIRECT_GENERAL_EXPENDITURE_CODES),
+            "native_item_codes": sorted(formula.direct_general_codes),
             "additive": True,
         },
         "categories": [
@@ -51,12 +62,13 @@ def census_taxonomy() -> dict:
             "raw_census_rows_additive": False,
             "partition_additive": True,
             "cross_category_addition_allowed": True,
+            "year_versioned_formula": True,
             "excluded_from_parent": [
                 "intergovernmental expenditure",
                 "utility expenditure",
                 "liquor store expenditure",
                 "insurance trust expenditure",
-                "native codes outside the official direct-general formula",
+                "historical/discontinued native codes outside the formula active for the selected year",
             ],
         },
     }
@@ -82,12 +94,15 @@ def government_finance_partition(
     if fiscal_year is None:
         raise HTTPException(404, "No Census government-finance facts are available")
 
-    result = load_government_expenditure_partition(
-        session,
-        jurisdiction_id=government_id,
-        fiscal_year=fiscal_year,
-        dataset_key=dataset_key,
-    )
+    try:
+        result = load_government_expenditure_partition(
+            session,
+            jurisdiction_id=government_id,
+            fiscal_year=fiscal_year,
+            dataset_key=dataset_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if result is None:
         raise HTTPException(404, "No READY Census finance release is available for this government/year")
 
@@ -99,7 +114,7 @@ def government_finance_partition(
             "expenditure are outside this parent."
         ),
         (
-            "TaxTrace presentation categories group the official Census direct-general item-code "
+            "TaxTrace presentation categories group the year-specific Census direct-general item-code "
             "formula without changing which native codes enter the parent."
         ),
     ]
@@ -122,6 +137,7 @@ def government_finance_partition(
         "release": result.release_key,
         "coverage_type": result.coverage_type,
         "taxonomy_version": partition.taxonomy_version,
+        "formula_key": partition.formula_key,
         "additive": True,
         "parent": {
             "key": partition.parent_key,
@@ -149,6 +165,7 @@ def government_finance_partition(
         "imputed_codes": list(result.imputed_codes),
         "source_row_count": result.source_row_count,
         "conservation_difference": str(partition.conservation_difference),
-        "source_url": partition.source_url,
+        "source_urls": list(partition.source_urls),
+        "formula_notes": list(partition.formula_notes),
         "warnings": warnings,
     }
