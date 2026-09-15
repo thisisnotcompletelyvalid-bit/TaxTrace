@@ -311,6 +311,17 @@ def ingest_usaspending_awards(
     typer.echo(json.dumps(result, indent=2))
 
 
+def _optional_iso_date(value: str | None, option_name: str) -> date | None:
+    if value is None:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            f"{option_name} must be an ISO date in YYYY-MM-DD format"
+        ) from exc
+
+
 @app.command("bootstrap-federal-awards")
 def bootstrap_federal_awards(
     fiscal_year: int = typer.Option(2025, "--fiscal-year"),
@@ -323,23 +334,25 @@ def bootstrap_federal_awards(
         True, "--prime-awards/--no-prime-awards"
     ),
     include_subawards: bool = typer.Option(True, "--subawards/--no-subawards"),
-    start_date: date | None = typer.Option(
+    start_date: str | None = typer.Option(
         None, "--start-date", help="Optional YYYY-MM-DD date within the fiscal year"
     ),
-    end_date: date | None = typer.Option(
+    end_date: str | None = typer.Option(
         None, "--end-date", help="Optional YYYY-MM-DD date within the fiscal year"
     ),
     wait: bool = typer.Option(True, "--wait/--no-wait"),
 ) -> None:
     """Request USAspending D1/D2 prime awards and/or File F subawards."""
     agency_value: int | str = int(agency) if agency.isdigit() else agency
+    parsed_start_date = _optional_iso_date(start_date, "--start-date")
+    parsed_end_date = _optional_iso_date(end_date, "--end-date")
     result = request_award_archive(
         fiscal_year,
         agency=agency_value,
         include_prime_awards=include_prime_awards,
         include_subawards=include_subawards,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=parsed_start_date,
+        end_date=parsed_end_date,
         wait=wait,
     )
     if wait:
