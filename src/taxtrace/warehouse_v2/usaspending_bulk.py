@@ -23,7 +23,7 @@ DOWNLOAD_ENDPOINTS = {
     "assistance": f"{API_ROOT}/download/assistance/",
 }
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
-ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
+REPORTING_AGENCIES_ENDPOINT = f"{API_ROOT}/reporting/agencies/overview/"
 
 # USAspending can report `ready` before the generated object is retrievable from
 # files.usaspending.gov. A real account-download run observed the transition
@@ -52,24 +52,25 @@ class USASpendingDownloadJob:
         )
 
 
-def _account_agencies_from_response(payload: dict) -> list[dict]:
-    agency_groups = payload.get("agencies") or {}
-    raw_agencies = [
-        *(agency_groups.get("cfo_agencies") or []),
-        *(agency_groups.get("other_agencies") or []),
-    ]
-    by_id: dict[str, dict] = {}
-    for agency in raw_agencies:
-        agency_id = agency.get("toptier_agency_id")
-        if agency_id is None:
-            continue
-        key = str(agency_id)
-        by_id[key] = {
-            "toptier_agency_id": key,
+def _reporting_agencies_from_response(payload: dict) -> list[dict]:
+    """Normalize one reporting-overview page to unique, selectable top-tier agencies."""
+    by_abbreviation: dict[str, dict] = {}
+    for agency in payload.get("results") or []:
+        abbreviation = str(agency.get("abbreviation") or "").strip().upper()
+        if not abbreviation:
+            raise RuntimeError(
+                "USAspending reporting overview returned an agency without an abbreviation"
+            )
+        by_abbreviation[abbreviation] = {
+            "abbreviation": abbreviation,
+            "agency_id": agency.get("agency_id"),
             "toptier_code": agency.get("toptier_code"),
-            "name": agency.get("name"),
+            "name": agency.get("agency_name"),
         }
-    return sorted(by_id.values(), key=lambda agency: int(agency["toptier_agency_id"]))
+    return sorted(
+        by_abbreviation.values(),
+        key=lambda agency: (str(agency.get("toptier_code") or ""), agency["abbreviation"]),
+    )
 
 
 class USASpendingBulkClient:
@@ -91,12 +92,12 @@ class USASpendingBulkClient:
 
     Live FY2025 validation further proved that the all-agency File C `award_financial` component
     fails independently after roughly sixteen minutes of upstream generation. File C is therefore
-    transport-sharded across USAspending's official `account_agencies` universe: one disjoint
-    top-tier-agency job per DABS-submitting agency. File A/B remain all-agency jobs. All component
-    jobs are submitted before polling so the upstream generator may process them concurrently.
-    Completed official archives are streamed into one local ZIP before the existing account-lake
-    materializer sees them. This changes transport only, not source grain, fiscal-period evidence,
-    additivity, or release provenance.
+    transport-sharded across the agencies USAspending reports for the exact fiscal year and period,
+    using the agency abbreviations explicitly supported by the account-download API. File A/B remain
+    all-agency jobs. All component jobs are submitted before polling so the upstream generator may
+    process them concurrently. Completed official archives are streamed into one local ZIP before
+    the existing account-lake materializer sees them. This changes transport only, not source grain,
+    fiscal-period evidence, additivity, or release provenance.
     """
 
     def __init__(self, timeout: float | None = None):
@@ -105,25 +106,68 @@ class USASpendingBulkClient:
         self.headers = {"User-Agent": settings.user_agent}
 
     def _submit_one(self, kind: str, payload: dict) -> USASpendingDownloadJob:
-        with httpx.Client(
-            timeout=self.timeout, follow_redirects=True, headers=self.headers
-        ) as client:
-            response = client.post(DOWNLOAD_ENDPOINTS[kind], json=payload)
-            response.raise_for_status()
-            data = response.json()
-        return USASpendingDownloadJob(kind=kind, request=payload, response=data)
+        last_error: httpx.HTTPStatusError | None = None
+        for attempt in range(3):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout, follow_redirects=True, headers=self.headers
+                ) as client:
+                    response = client.post(DOWNLOAD_ENDPOINTS[kind], json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                return USASpendingDownloadJob(kind=kind, request=payload, response=data)
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code
+                retriable = status_code == 429 or status_code >= 500
+                if not retriable or attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+        assert last_error is not None
+        raise last_error
 
-    def account_agencies(self) -> list[dict]:
-        """Return the unique top-tier agencies USAspending says have DABS submissions."""
+    def reporting_agencies(self, fiscal_year: int, fiscal_period: int) -> list[dict]:
+        """Return agencies with submission data for the exact fiscal year and period."""
+        agencies: dict[str, dict] = {}
+        page = 1
         with httpx.Client(
             timeout=self.timeout, follow_redirects=True, headers=self.headers
         ) as client:
-            response = client.post(ACCOUNT_AGENCIES_ENDPOINT, json={"type": "account_agencies"})
-            response.raise_for_status()
-            agencies = _account_agencies_from_response(response.json())
+            while True:
+                response = client.get(
+                    REPORTING_AGENCIES_ENDPOINT,
+                    params={
+                        "fiscal_year": fiscal_year,
+                        "fiscal_period": fiscal_period,
+                        "page": page,
+                        "limit": 100,
+                        "sort": "toptier_code",
+                        "order": "asc",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                for agency in _reporting_agencies_from_response(payload):
+                    agencies[agency["abbreviation"]] = agency
+
+                metadata = payload.get("page_metadata") or {}
+                if not metadata.get("hasNext"):
+                    break
+                next_page = metadata.get("next")
+                if next_page is None:
+                    raise RuntimeError(
+                        "USAspending reporting overview said more pages exist but returned no next page"
+                    )
+                page = int(next_page)
+
         if not agencies:
-            raise RuntimeError("USAspending returned no DABS account agencies for File C sharding")
-        return agencies
+            raise RuntimeError(
+                f"USAspending returned no reporting agencies for FY{fiscal_year} P{fiscal_period}"
+            )
+        return sorted(
+            agencies.values(),
+            key=lambda agency: (str(agency.get("toptier_code") or ""), agency["abbreviation"]),
+        )
 
     @staticmethod
     def _job_record(job: USASpendingDownloadJob) -> dict:
@@ -133,19 +177,29 @@ class USASpendingBulkClient:
             "response": job.response,
         }
 
+    @staticmethod
+    def _fiscal_period(filters: dict) -> int:
+        period = filters.get("period")
+        if period is not None:
+            return int(period)
+        quarter = filters.get("quarter")
+        if quarter is not None:
+            return int(quarter) * 3
+        raise ValueError("File C agency sharding requires a fiscal period or quarter")
+
     def _submit_file_c_agency_shards(self, payload: dict) -> USASpendingDownloadJob:
         filters = payload.get("filters") or {}
-        agencies = self.account_agencies()
+        fiscal_year = int(filters["fy"])
+        fiscal_period = self._fiscal_period(filters)
+        agencies = self.reporting_agencies(fiscal_year, fiscal_period)
         split_jobs: list[dict] = []
         for agency in agencies:
             shard_payload = json.loads(json.dumps(payload))
-            shard_payload["filters"]["agency"] = agency["toptier_agency_id"]
+            shard_payload["filters"]["agency"] = agency["abbreviation"]
             shard = self._submit_one("accounts", shard_payload)
             split_jobs.append(self._job_record(shard))
 
-        fiscal_year = filters.get("fy", "unknown")
-        period = filters.get("period") or filters.get("quarter") or "unknown"
-        synthetic_name = f"FY{fiscal_year}P{period}_TaxTrace_AgencySharded_FileC.zip"
+        synthetic_name = f"FY{fiscal_year}P{fiscal_period}_TaxTrace_AgencySharded_FileC.zip"
         return USASpendingDownloadJob(
             kind="accounts",
             request=payload,
@@ -153,7 +207,7 @@ class USASpendingBulkClient:
                 "status": "submitted",
                 "file_name": synthetic_name,
                 "file_url": f"taxtrace-split://{synthetic_name}",
-                "split_strategy": "file_c_by_dabs_toptier_agency",
+                "split_strategy": "file_c_by_reporting_agency",
                 "agency_count": len(agencies),
                 "split_jobs": split_jobs,
             },
@@ -168,8 +222,9 @@ class USASpendingBulkClient:
         agency = str(filters.get("agency") or "all").lower()
 
         # The full-year all-agency File C generator is independently unreliable upstream.
-        # Agency is an official account-download filter whose top-tier values are unique, so
-        # these shards partition the source without changing the File C accounting grain.
+        # The reporting overview supplies the agencies that actually submitted for this FY/period;
+        # abbreviations are valid account-download selectors and partition File C transport without
+        # changing the underlying accounting grain.
         if (
             kind == "accounts"
             and submission_types == ["award_financial"]
@@ -202,7 +257,7 @@ class USASpendingBulkClient:
                     "status": "submitted",
                     "file_name": synthetic_name,
                     "file_url": f"taxtrace-split://{synthetic_name}",
-                    "split_strategy": "submission_type_with_file_c_dabs_agency_shards",
+                    "split_strategy": "submission_type_with_file_c_reporting_agency_shards",
                     "file_c_agency_count": file_c_agency_count,
                     "split_jobs": split_jobs,
                 },
