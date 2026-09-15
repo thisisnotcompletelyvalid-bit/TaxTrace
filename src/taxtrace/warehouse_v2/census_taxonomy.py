@@ -152,22 +152,28 @@ def category_for_item_code(item_code: str) -> CensusReceiptCategory | None:
     code = item_code.strip().upper()
     if code not in DIRECT_GENERAL_EXPENDITURE_CODES:
         return None
+
+    # Special I/J items have object semantics that override their numeric suffix.
     for category in CATEGORIES:
         if code in category.special_item_codes:
             return category
-        if len(code) == 3 and code[1:] in category.function_codes:
-            return category
+
+    # The regular function grouping applies only to Census E/F/G direct-general
+    # expenditure rows. Applying it to I89 would incorrectly treat general-debt
+    # interest as function 89 "other and unallocable."
+    if code[:1] in {"E", "F", "G"} and len(code) == 3:
+        for category in CATEGORIES:
+            if code[1:] in category.function_codes:
+                return category
     return None
 
 
 def taxonomy_audit() -> dict[str, object]:
     assignments: dict[str, list[str]] = {}
     for code in sorted(DIRECT_GENERAL_EXPENDITURE_CODES):
-        for category in CATEGORIES:
-            if code in category.special_item_codes or (
-                len(code) == 3 and code[1:] in category.function_codes
-            ):
-                assignments.setdefault(code, []).append(category.key)
+        category = category_for_item_code(code)
+        if category is not None:
+            assignments.setdefault(code, []).append(category.key)
     missing = tuple(sorted(DIRECT_GENERAL_EXPENDITURE_CODES - assignments.keys()))
     duplicates = {
         code: tuple(keys)
