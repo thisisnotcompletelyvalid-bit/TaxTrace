@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.7.1 — 2026-09-14
+
+Made the real national data path an explicit product/deployment concern rather than an implicit manual prerequisite:
+
+- added idempotent product-data activation that detects already-ready expensive layers and populates missing national Census, Treasury/OMB, and full-year USAspending account data;
+- added `make activate-product` and `make data-status` operational entry points;
+- added a one-shot Docker Compose data initializer backed by persistent PostgreSQL/raw/warehouse volumes before the API starts;
+- added `GET /v2/data/product-readiness` so fixture/empty deployments cannot silently present themselves as nationally populated;
+- made readiness verify both release metadata and physically available normalized lake objects;
+- added a `/governments` web surface over the real Census registry, coverage metadata, and supported 2022 Direct General Expenditure partition;
+- added a full-scale Census product activation gate against PostgreSQL, proving 92,114 registry rows, 1,337,594 finance rows, 88,819 governments, 211 classifications, normalized Parquet, and exact conservation for a real government partition;
+- replaced the brittle current-year Treasury Combined Statement workbook ingestion path with machine-readable Fiscal Data MTS Table 9 detail and exact-dollar control reconciliation;
+- retained Treasury receipt/outlay totals only as non-additive controls and fail closed if source detail does not reproduce them exactly;
+- fixed current Typer CLI compatibility so top-level and federal-data commands construct correctly with the installed Typer version;
+- added resilient USAspending account transport: multi-submission A/B/C account requests are split into separate official asynchronous jobs, every component must reach terminal success, and their source members are streamed into one local archive before the unchanged A/B/C materializer runs;
+- preserved A/B/C as separate non-additive source grains and retained the original fiscal-year/reporting-period request as logical release provenance;
+- added a federal real-source release gate requiring current Treasury/OMB controls, full-year USAspending File B/C detail, local Parquet availability, substantive File B account matching, and exact Federal Product V2 receipt conservation;
+- expanded regression coverage for Treasury MTS controls, CLI construction, deployment readiness, split USAspending polling, and streaming ZIP composition.
+
+This release does **not** change tax calculation or allocation semantics. Methodology therefore remains **1.4.0**, while the application advances to **0.7.1**.
+
 ## 0.7.0 — 2026-09-14
 
 Completed the official Census additive expenditure taxonomy for the nationwide state/local Warehouse V2 backbone:
