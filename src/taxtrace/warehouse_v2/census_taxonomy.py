@@ -12,17 +12,16 @@ STATE_LOCAL_SUMMARY_METHODOLOGY_URL = (
     "https://www2.census.gov/programs-surveys/gov-finances/technical-documentation/"
     "classification-manual/methodology_for_summary_tabulations.pdf"
 )
-STATE_2022_SUMMARY_METHODOLOGY_URL = (
-    "https://www2.census.gov/programs-surveys/state/technical-documentation/"
-    "methodology/methodology_summary_tabulations.xlsx"
-)
-STATE_2022_TECHNICAL_DOCUMENTATION_URL = (
-    "https://www2.census.gov/programs-surveys/state/technical-documentation/"
-    "complete-technical-documentation/statetechdoc2022.pdf"
-)
 STATE_LOCAL_2022_CONTENT_CHANGES_URL = (
     "https://www2.census.gov/programs-surveys/gov-finances/tables/2022/"
     "Summary%20of%20Content%20Changes%20for%20State%20and%20Local%20Government%20Finance%20Surveys.pdf"
+)
+STATE_LOCAL_CURRENT_AGGREGATE_DATA_URL = (
+    "https://www2.census.gov/programs-surveys/gov-finances/data/GS00LOCALFIN.zip"
+)
+STATE_LOCAL_2022_INDIVIDUAL_UNIT_URL = (
+    "https://www2.census.gov/programs-surveys/gov-finances/tables/2022/"
+    "2022_Individual_Unit_File.zip"
 )
 
 
@@ -36,110 +35,87 @@ class CensusFormula:
     notes: tuple[str, ...]
 
 
-# Census's Summary Tabulations workbook defines SF0176, "Expenditure - Direct
-# Expenditure - Total General Expenditure", with an explicit native-code list.
-# For 2022, and again for 2023-2024, the list is the same 72 codes below.
+# The combined State and Local Government Finances summary-tabulation manual
+# defines Direct General Expenditure from E/F/G functional expenditure rows,
+# I89 interest on general debt, and J assistance rows. The 2022 content changes
+# alter the native code system: F becomes the consolidated capital family, G/K
+# capital families are discontinued, welfare detail 74/75 and J67/J68/J85 is
+# consolidated into E79, and environmental-health code 27 is recoded into the
+# major functions it serves. Fire protection (24) remains a general-expenditure
+# function. Utilities 91-94 and liquor stores 90 remain separate sectors.
 #
-# Keep this list literal. In particular, do not infer parent membership from a
-# function suffix or an E/F prefix. The raw finance files contain expenditure-
-# shaped codes such as E24/F24 (fire protection), utility codes 91-94, and
-# liquor-store code 90 that are not members of the published SF0176 formula.
+# This is therefore an explicit post-2022 adaptation of the *combined state and
+# local* formula. Do not substitute the similarly named State Government
+# Finances SF0176 workbook: it is a different program/table family and omits
+# local-government function 24 while including state-only function 54.
+POST_2022_DIRECT_GENERAL_FUNCTION_CODES = frozenset(
+    {
+        "01",
+        "03",
+        "04",
+        "05",
+        "12",
+        "16",
+        "18",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "29",
+        "31",
+        "32",
+        "36",
+        "44",
+        "45",
+        "50",
+        "52",
+        "55",
+        "56",
+        "59",
+        "60",
+        "61",
+        "62",
+        "66",
+        "77",
+        "79",
+        "80",
+        "81",
+        "85",
+        "87",
+        "89",
+    }
+)
 POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES = frozenset(
     {
-        "E01",
-        "E03",
-        "E04",
-        "E05",
-        "E12",
-        "E16",
-        "E18",
-        "E21",
-        "E22",
-        "E23",
-        "E25",
-        "E26",
-        "E29",
-        "E31",
-        "E32",
-        "E36",
-        "E44",
-        "E45",
-        "E50",
-        "E52",
-        "E54",
-        "E55",
-        "E56",
-        "E59",
-        "E60",
-        "E61",
-        "E62",
-        "E66",
-        "E77",
-        "E79",
-        "E80",
-        "E81",
-        "E85",
-        "E87",
-        "E89",
-        "F01",
-        "F03",
-        "F04",
-        "F05",
-        "F12",
-        "F16",
-        "F18",
-        "F21",
-        "F22",
-        "F23",
-        "F25",
-        "F26",
-        "F29",
-        "F31",
-        "F32",
-        "F36",
-        "F44",
-        "F45",
-        "F50",
-        "F52",
-        "F54",
-        "F55",
-        "F56",
-        "F59",
-        "F60",
-        "F61",
-        "F62",
-        "F66",
-        "F77",
-        "F79",
-        "F80",
-        "F81",
-        "F85",
-        "F87",
-        "F89",
+        *(f"E{function_code}" for function_code in POST_2022_DIRECT_GENERAL_FUNCTION_CODES),
+        *(f"F{function_code}" for function_code in POST_2022_DIRECT_GENERAL_FUNCTION_CODES),
         "I89",
         "J19",
     }
 )
 
 POST_2022_FORMULA = CensusFormula(
-    key="census-sf0176-direct-general-2022-2024",
-    label="Census SF0176 direct general expenditure, 2022-2024 code system",
+    key="census-state-local-direct-general-2022-2024",
+    label="Census state and local direct general expenditure, post-2022 code system",
     supported_years=frozenset({2022, 2024}),
     direct_general_codes=POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES,
     source_urls=(
-        STATE_2022_SUMMARY_METHODOLOGY_URL,
-        STATE_LOCAL_2022_CONTENT_CHANGES_URL,
-        STATE_2022_TECHNICAL_DOCUMENTATION_URL,
         STATE_LOCAL_SUMMARY_METHODOLOGY_URL,
+        STATE_LOCAL_2022_CONTENT_CHANGES_URL,
+        STATE_LOCAL_CURRENT_AGGREGATE_DATA_URL,
+        STATE_LOCAL_2022_INDIVIDUAL_UNIT_URL,
     ),
     notes=(
-        "Parent membership is the literal SF0176 ITEM_CODES_2022 / ITEM_CODES_2023_2024 list from Census's Summary Tabulations workbook.",
+        "Parent membership adapts the Census State and Local Government Finances Direct General Expenditure summary formula to the post-2022 native code system.",
         "F is the consolidated capital-expenditure family effective 2022; G/K capital rows are not additive beside F.",
-        "E74/E75 and J67/J68 are discontinued from this 2022 formula; J85 is not a member either.",
-        "Environmental-health code 27 is not a member of SF0176.",
-        "Fire-protection codes E24/F24 are reported in raw Census finance data but are not members of the published SF0176 direct-general formula.",
+        "E74/E75 and J67/J68/J85 are discontinued from the post-2022 formula after welfare recoding into E79.",
+        "Environmental-health code 27 is not a standalone member after Census recoded it into major functions.",
+        "Fire-protection codes E24/F24 remain members of combined state-and-local Direct General Expenditure.",
+        "State-only function 54 is not part of the combined state-and-local Direct General Expenditure function set.",
         "Utility codes 91-94, liquor-store code 90, and their related interest/capital codes are outside this direct-general parent.",
-        "The current revised 2022 published national SF0176 control does not equal the sum of the current public-use native codes in the static methodology formula; TaxTrace records that as a source-level aggregate reconciliation issue rather than altering unit-level formula membership.",
+        "Published aggregate controls may contain Census aggregate-stage adjustments that are not present as additive dollars on any individual government row; TaxTrace does not redistribute those adjustments across governments.",
     ),
 )
 
@@ -179,6 +155,7 @@ CATEGORIES = (
     ),
     CensusReceiptCategory("health", "Health", frozenset({"32"})),
     CensusReceiptCategory("hospitals", "Hospitals", frozenset({"36"})),
+    CensusReceiptCategory("fire_protection", "Fire protection", frozenset({"24"})),
     CensusReceiptCategory("police", "Police protection", frozenset({"62"})),
     CensusReceiptCategory("corrections", "Corrections", frozenset({"04", "05"})),
     CensusReceiptCategory("judicial_legal", "Judicial and legal", frozenset({"25"})),
@@ -195,7 +172,7 @@ CATEGORIES = (
     CensusReceiptCategory(
         "natural_resources_environment",
         "Natural resources and environment",
-        frozenset({"54", "55", "56", "59"}),
+        frozenset({"55", "56", "59"}),
     ),
     CensusReceiptCategory("parks_recreation", "Parks and recreation", frozenset({"61"})),
     CensusReceiptCategory(
