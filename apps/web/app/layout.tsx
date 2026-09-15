@@ -11,9 +11,10 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en">
       <body>
-        <nav style={{ maxWidth: "1100px", margin: "0 auto", padding: "1rem 1.25rem 0", display: "flex", gap: "1rem" }}>
+        <nav style={{ maxWidth: "1100px", margin: "0 auto", padding: "1rem 1.25rem 0", display: "flex", gap: "1rem", flexWrap: "wrap" }}>
           <Link href="/">Federal receipt</Link>
           <Link href="/search">Federal search</Link>
+          <Link href="/governments">Government data</Link>
           <Link href="/florida">Florida + Gainesville</Link>
         </nav>
         {children}
