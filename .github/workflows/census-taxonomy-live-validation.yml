@@ -19,105 +19,113 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
-      - name: Download official 2022 Census finance archive
+      - name: Download official Census source files
         run: |
           mkdir -p /tmp/taxtrace-census
           python - <<'PY'
           from pathlib import Path
           from taxtrace.warehouse_v2.download import stream_download
+
+          root = Path('/tmp/taxtrace-census')
           stream_download(
               'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip',
-              Path('/tmp/taxtrace-census/2022_Individual_Unit_File.zip'),
+              root / '2022_Individual_Unit_File.zip',
+              overwrite=True,
+          )
+          stream_download(
+              'https://www2.census.gov/programs-surveys/state/technical-documentation/methodology/methodology_summary_tabulations.xlsx',
+              root / 'methodology_summary_tabulations.xlsx',
+              overwrite=True,
+          )
+          stream_download(
+              'https://www2.census.gov/programs-surveys/gov-finances/tables/2022/22slsstab1.xlsx',
+              root / '22slsstab1.xlsx',
               overwrite=True,
           )
           PY
-      - name: Reconcile individual units to state-type public-use file
+      - name: Extract direct-general formulas from Census methodology workbook
         run: |
           python - <<'PY'
-          from collections import Counter, defaultdict
+          from pathlib import Path
+          from openpyxl import load_workbook
+
+          root = Path('/tmp/taxtrace-census')
+          path = root / 'methodology_summary_tabulations.xlsx'
+          workbook_formula = load_workbook(path, read_only=True, data_only=False)
+          workbook_values = load_workbook(path, read_only=True, data_only=True)
+          print('FORMULA_WORKBOOK_SHEETS', workbook_formula.sheetnames)
+
+          needles = (
+              'direct general',
+              'capital outlay',
+              'other direct general',
+              'elementary',
+              'higher education',
+              'education',
+              'interest on debt',
+              'assistance and subsidies',
+          )
+          for sheet_name in workbook_formula.sheetnames:
+              formula_sheet = workbook_formula[sheet_name]
+              value_sheet = workbook_values[sheet_name]
+              print('SHEET_DIMENSIONS', sheet_name, formula_sheet.max_row, formula_sheet.max_column)
+              matches = []
+              for row_index, row in enumerate(formula_sheet.iter_rows(values_only=True), start=1):
+                  text = ' | '.join(str(value) for value in row if value is not None).lower()
+                  if any(needle in text for needle in needles):
+                      matches.append(row_index)
+              print('MATCH_ROWS', sheet_name, matches[:300])
+              expanded = set()
+              for row_index in matches:
+                  for candidate in range(max(1, row_index - 2), min(formula_sheet.max_row, row_index + 2) + 1):
+                      expanded.add(candidate)
+              for row_index in sorted(expanded):
+                  formula_values = [cell.value for cell in formula_sheet[row_index]]
+                  data_values = [cell.value for cell in value_sheet[row_index]]
+                  print('FORMULA_ROW', sheet_name, row_index, formula_values[:40])
+                  if data_values != formula_values:
+                      print('VALUE_ROW', sheet_name, row_index, data_values[:40])
+          PY
+      - name: Compare methodology formulas with public-use and published controls
+        run: |
+          python - <<'PY'
+          from collections import defaultdict
           from decimal import Decimal
           from pathlib import Path
           from zipfile import ZipFile
+          from openpyxl import load_workbook
 
           from taxtrace.warehouse_v2.census import iter_finance_records
           from taxtrace.warehouse_v2.census_taxonomy import POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES
 
-          source = Path('/tmp/taxtrace-census/2022_Individual_Unit_File.zip')
-          raw_by_type_code = defaultdict(lambda: Decimal('0'))
+          root = Path('/tmp/taxtrace-census')
+          source = root / '2022_Individual_Unit_File.zip'
           raw_by_code = defaultdict(lambda: Decimal('0'))
           for record in iter_finance_records(source):
-              code = record.item_code.upper()
-              amount = record.amount_dollars
-              gov_type = record.government_id[2]
-              raw_by_type_code[(gov_type, code)] += amount
-              raw_by_code[code] += amount
+              raw_by_code[record.item_code.upper()] += record.amount_dollars
 
           with ZipFile(source) as archive:
               state_type_name = next(name for name in archive.namelist() if name.endswith('22statetypepu.txt'))
               lines = archive.read(state_type_name).decode('utf-8-sig', errors='replace').splitlines()
-              technical_name = next(name for name in archive.namelist() if name.endswith('Technical Documentation.pdf'))
-              Path('/tmp/taxtrace-census/technical.pdf').write_bytes(archive.read(technical_name))
 
-          prefixes = Counter()
-          public_by_state_type_code = defaultdict(lambda: Decimal('0'))
+          public_all = defaultdict(lambda: Decimal('0'))
           for line in lines:
-              if len(line) < 20:
+              if len(line) < 20 or line[:3] != '001':
                   continue
-              prefix = line[:3]
               item = line[4:7].strip().upper()
               try:
-                  amount_thousands = Decimal(line[7:20].strip())
+                  amount = Decimal(line[7:20].strip()) * Decimal('1000')
               except Exception:
                   continue
-              prefixes[prefix] += 1
-              state = prefix[:2]
-              gov_type = prefix[2]
-              public_by_state_type_code[(state, gov_type, item)] += amount_thousands * Decimal('1000')
+              public_all[item] += amount
 
-          print('PREFIX_SAMPLE', prefixes.most_common(30))
-          print('NATIONAL_PREFIXES', sorted((p, n) for p, n in prefixes.items() if p.startswith('00')))
+          raw_formula_total = sum((raw_by_code[code] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES), Decimal('0'))
+          public_formula_total = sum((public_all[code] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES), Decimal('0'))
+          print('CURRENT_FORMULA_TOTALS', {'raw': str(raw_formula_total), 'public_001': str(public_formula_total), 'difference': str(raw_formula_total - public_formula_total)})
 
-          print('TYPE_RECONCILIATION')
-          for gov_type in '012345':
-              raw_total = sum(
-                  (raw_by_type_code[(gov_type, code)] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES),
-                  Decimal('0'),
-              )
-              public_total = sum(
-                  (public_by_state_type_code[('00', gov_type, code)] for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES),
-                  Decimal('0'),
-              )
-              print('TYPE_TOTAL', gov_type, 'raw', raw_total, 'public', public_total, 'difference', raw_total - public_total)
-
-          print('EDUCATION_RECONCILIATION')
-          for gov_type in '012345':
-              raw = raw_by_type_code[(gov_type, 'E12')] + raw_by_type_code[(gov_type, 'F12')]
-              public = public_by_state_type_code[('00', gov_type, 'E12')] + public_by_state_type_code[('00', gov_type, 'F12')]
-              print('E12_F12', gov_type, 'raw', raw, 'public', public, 'difference', raw - public)
-
-          print('LARGEST_TYPE_CODE_DIFFERENCES')
-          diffs = []
-          for gov_type in '012345':
-              for code in sorted(POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES):
-                  raw = raw_by_type_code[(gov_type, code)]
-                  public = public_by_state_type_code[('00', gov_type, code)]
-                  diff = raw - public
-                  if diff:
-                      diffs.append((abs(diff), gov_type, code, raw, public, diff))
-          for _, gov_type, code, raw, public, diff in sorted(diffs, reverse=True)[:80]:
-              print('TYPE_CODE_DIFF', gov_type, code, 'raw', raw, 'public', public, 'difference', diff)
-
-          print('ACTIVE_F_CODES_OUTSIDE_FORMULA')
-          outside_f = [
-              (amount, code)
-              for code, amount in raw_by_code.items()
-              if code.startswith('F') and code not in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES and amount != 0
-          ]
-          for amount, code in sorted(outside_f, reverse=True)[:50]:
-              print('OUTSIDE_F', code, amount)
+          published = load_workbook(root / '22slsstab1.xlsx', read_only=True, data_only=True)
+          sheet = published[published.sheetnames[0]]
+          for row_index in range(82, 101):
+              values = list(next(sheet.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))
+              print('PUBLISHED_ROW', row_index, values[:8])
           PY
-      - name: Inspect technical documentation for tabulation notes
-        run: |
-          pdftotext -layout /tmp/taxtrace-census/technical.pdf /tmp/taxtrace-census/technical.txt
-          echo '--- dependent / school / state type / public use / aggregate matches ---'
-          grep -inE 'dependent|school|state.?type|public use|aggregate|double.?count|parent|PID' /tmp/taxtrace-census/technical.txt | head -n 200 || true
