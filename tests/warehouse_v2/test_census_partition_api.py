@@ -1,5 +1,7 @@
 from decimal import Decimal
 
+import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from apps.api.app.routers.census_taxonomy_v2 import (
@@ -34,15 +36,28 @@ def _classification(db_session, code: str, *, flow_type: str = "EXPENDITURE") ->
     return row
 
 
-def test_taxonomy_endpoint_reports_machine_valid_additive_parent() -> None:
-    result = census_taxonomy()
+def test_taxonomy_endpoint_reports_machine_valid_year_specific_parent() -> None:
+    result = census_taxonomy(2022)
 
-    assert result["taxonomy_version"] == "1.0.0"
+    assert result["taxonomy_version"] == "1.1.0"
+    assert result["formula_key"] == "census-direct-general-post-2022"
+    assert result["fiscal_year"] == 2022
+    assert result["supported_fiscal_years"] == [2022, 2024]
     assert result["parent"]["key"] == "direct_general_expenditure"
     assert result["parent"]["additive"] is True
+    assert "F62" in result["parent"]["native_item_codes"]
+    assert "G62" not in result["parent"]["native_item_codes"]
     assert result["audit"]["valid"] is True
     assert result["semantics"]["raw_census_rows_additive"] is False
     assert result["semantics"]["partition_additive"] is True
+    assert result["semantics"]["year_versioned_formula"] is True
+    assert len(result["sources"]) >= 3
+
+
+def test_taxonomy_endpoint_refuses_unsupported_year() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        census_taxonomy(2021)
+    assert exc_info.value.status_code == 422
 
 
 def test_government_partition_uses_one_ready_census_release_and_conserves(db_session) -> None:
@@ -77,6 +92,9 @@ def test_government_partition_uses_one_ready_census_release_and_conserves(db_ses
         "E24": Decimal("50.00"),
         "L44": Decimal("900.00"),
         "E91": Decimal("400.00"),
+        "G44": Decimal("300.00"),
+        "J67": Decimal("200.00"),
+        "E27": Decimal("100.00"),
         "T01": Decimal("1000.00"),
     }
     for code, amount in values.items():
@@ -112,13 +130,16 @@ def test_government_partition_uses_one_ready_census_release_and_conserves(db_ses
     assert result["dataset_key"] == "census-gov-finance-2022"
     assert result["release"] == "FY2022"
     assert result["coverage_type"] == "CENSUS"
+    assert result["taxonomy_version"] == "1.1.0"
+    assert result["formula_key"] == "census-direct-general-post-2022"
     assert result["additive"] is True
     assert result["parent"]["amount"] == "175.00"
     assert result["conservation_difference"] == "0.00"
     assert result["residual"]["amount"] == "0.00"
-    assert result["excluded_native_expenditure_codes"] == ["E91", "L44"]
+    assert result["excluded_native_expenditure_codes"] == ["E27", "E91", "G44", "J67", "L44"]
     assert result["imputed_codes"] == ["F62"]
-    assert result["source_row_count"] == 5
+    assert result["source_row_count"] == 8
+    assert len(result["source_urls"]) >= 3
 
     by_key = {node["key"]: node for node in result["nodes"]}
     assert by_key["police"]["amount"] == "125.00"
