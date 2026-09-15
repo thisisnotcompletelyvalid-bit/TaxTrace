@@ -62,7 +62,7 @@ jobs:
           --no-2024-sample
           --skip-federal-core
           --skip-federal-accounts
-      - name: Verify deployment readiness and real government partition
+      - name: Verify deployment readiness and real local-government partition
         run: |
           python - <<'PY'
           from decimal import Decimal
@@ -84,31 +84,44 @@ jobs:
               assert status.census_finance_2022.row_count >= 1_300_000, status
               assert status.census_finance_2022.government_count >= 88_000, status
               assert status.census_finance_2022.parquet_objects >= 1, status
+              assert status.census_finance_2022.local_parquet_objects >= 1, status
 
               candidates = session.execute(
-                  select(Jurisdiction.id, Jurisdiction.name, func.count(GovernmentFinanceFact.id))
+                  select(
+                      Jurisdiction.id,
+                      Jurisdiction.name,
+                      Jurisdiction.level,
+                      func.count(GovernmentFinanceFact.id),
+                  )
                   .join(GovernmentFinanceFact, GovernmentFinanceFact.jurisdiction_id == Jurisdiction.id)
                   .where(
-                      Jurisdiction.name.ilike('%Gainesville%'),
-                      Jurisdiction.level == JurisdictionLevel.MUNICIPAL,
+                      Jurisdiction.level != JurisdictionLevel.STATE,
                       GovernmentFinanceFact.fiscal_year == 2022,
                   )
-                  .group_by(Jurisdiction.id, Jurisdiction.name)
+                  .group_by(Jurisdiction.id, Jurisdiction.name, Jurisdiction.level)
                   .order_by(func.count(GovernmentFinanceFact.id).desc())
+                  .limit(50)
               ).all()
-              assert candidates, 'No Gainesville municipal government with 2022 finance facts was found'
-              government_id, name, fact_count = candidates[0]
-              result = load_government_expenditure_partition(
-                  session,
-                  jurisdiction_id=government_id,
-                  fiscal_year=2022,
-              )
-              assert result is not None, (government_id, name)
-              assert result.partition.parent_amount > Decimal('0'), result
+              assert candidates, 'No local government with 2022 finance facts was found'
+
+              selected = None
+              for government_id, name, level, fact_count in candidates:
+                  result = load_government_expenditure_partition(
+                      session,
+                      jurisdiction_id=government_id,
+                      fiscal_year=2022,
+                  )
+                  if result is not None and result.partition.parent_amount > Decimal('0'):
+                      selected = (government_id, name, level, fact_count, result)
+                      break
+
+              assert selected is not None, 'No candidate local government had positive Direct General Expenditure'
+              government_id, name, level, fact_count, result = selected
               assert result.partition.conservation_difference == Decimal('0.00'), result
               print({
                   'government_id': government_id,
                   'government_name': name,
+                  'government_level': level.value,
                   'source_fact_count': fact_count,
                   'direct_general_expenditure': str(result.partition.parent_amount),
                   'taxonomy_version': result.partition.taxonomy_version,
