@@ -1,6 +1,6 @@
 # TaxTrace product scope — phases 0–9A + Federal Product V2
 
-Version: 0.6.0
+Version: 0.6.5
 Methodology version: 1.3.0
 
 ## Purpose
@@ -20,7 +20,8 @@ Implemented scope:
 - Phase 8: Alachua/Gainesville dedicated surtax routing plus Gainesville actual-spending reference;
 - Phase 9A: quick-mode statistical sales-tax estimation using BLS Consumer Expenditure data and a transparent Florida taxability matrix;
 - Warehouse V2: national Census state/local backbone plus USAspending File A/B/C/D1/D2/F lake ingestion and coverage metadata;
-- Federal Product V2: OMB-controlled personalized federal accounts with File B program/object detail, conservative File C award projection, D1/D2 prime-recipient enrichment, and non-additive File F subaward drilldown.
+- Federal Product V2: OMB-controlled personalized federal accounts with File B program/object detail, conservative File C award projection, D1/D2 prime-recipient enrichment, and non-additive File F subaward drilldown;
+- Federal Search V2: direct full-year D1/D2/File F lake search for prime awards, recipients, subawards, and subrecipients with optional receipt-aware File C annotations.
 
 ## Tax concept
 
@@ -96,12 +97,20 @@ The national Census Warehouse V2 backbone is implemented, but a nationwide state
 
 ## Search scope
 
-The current federal portable SQLite/PostgreSQL-compatible search index covers agencies, federal/Treasury accounts, program activities, object classes, budget functions/subfunctions, awards, recipients, canonical categories, agency abbreviations, automatic aliases, and curated synonyms. Search results can overlap and are never presented as an additive receipt.
+Federal Search V2 is the primary award-scale Warehouse V2 search path in 0.6.5. It searches normalized full-year D1/D2 and File F Parquet data directly with DuckDB rather than copying award-scale rows into the legacy relational search-document table.
 
-Federal search remains on the V1 index in 0.6.0. The planned 0.6.5 search migration will index Warehouse V2 D1/D2/File F award, recipient, subaward, and subrecipient entities while preserving non-additive search semantics.
+D1/D2 are transaction grains, so prime-award search results are collapsed to canonical award identity before display. Recipient results group distinct prime-award identities by recipient name/UEI. File F subaward and subrecipient results remain downstream of the prime award. Prime awards, recipients, subawards, accounts, agencies, programs, and classifications can overlap, so all search results are non-additive.
+
+Public-data search is exposed through `GET /v2/search/federal`. Receipt-aware search is exposed through `POST /v2/search/federal`. Receipt context can annotate a prime award or recipient only with personalized amounts already produced by the conserved File C award projection. File F never receives an independent personalized amount; a subaward may show its prime award's File C amount only as clearly labeled navigation context.
+
+Only exact READY full-year award releases back annual Search V2 coverage. Missing release metadata or local Parquet objects produces an explicit incomplete-coverage state rather than fabricated results.
+
+The dedicated web surface is `/search`. The original portable V1 search remains available for backward compatibility and legacy non-award entities during the broader Warehouse V2 migration.
+
+See `docs/FEDERAL_SEARCH_V2.md` for the detailed search contract.
 
 ## Privacy posture
 
-No account, SSN, name, tax document, or street address is required. Tax inputs are sent in POST bodies. The Gainesville quick mode requires no address. Production deployments should prevent request-body logging of income/household inputs.
+No account, SSN, name, tax document, or street address is required. Tax inputs are sent in POST bodies. Public-data Federal Search V2 requires no personal tax inputs. Receipt-aware search receives only the same supported tax inputs used by the federal receipt.
 
-Future nationwide jurisdiction resolution should prefer the least precise location sufficient for the requested tax/jurisdiction calculation and should not require a street address unless a tax rule actually depends on one.
+Production deployments should prevent request-body logging of income/household inputs. Future nationwide jurisdiction resolution should prefer the least precise location sufficient for the requested tax/jurisdiction calculation and should not require a street address unless a tax rule actually depends on one.
