@@ -24,6 +24,7 @@ DOWNLOAD_ENDPOINTS = {
 }
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
 REPORTING_AGENCIES_ENDPOINT = f"{API_ROOT}/reporting/agencies/overview/"
+SHARD_SUBMISSION_PACE_SECONDS = 0.25
 
 # USAspending can report `ready` before the generated object is retrievable from
 # files.usaspending.gov. A real account-download run observed the transition
@@ -94,9 +95,10 @@ class USASpendingBulkClient:
     fails independently after roughly sixteen minutes of upstream generation. File C is therefore
     transport-sharded across the agencies USAspending reports for the exact fiscal year and period,
     using the agency abbreviations explicitly supported by the account-download API. File A/B remain
-    all-agency jobs. All component jobs are submitted before polling so the upstream generator may
-    process them concurrently. Completed official archives are streamed into one local ZIP before
-    the existing account-lake materializer sees them. This changes transport only, not source grain,
+    all-agency jobs. Shard submissions are lightly paced and transient HTTP/transport failures are
+    retried a bounded number of times. Every shard must still be accepted and later reach terminal
+    success. Completed official archives are streamed into one local ZIP before the existing
+    account-lake materializer sees them. This changes transport only, not source grain,
     fiscal-period evidence, additivity, or release provenance.
     """
 
@@ -106,7 +108,7 @@ class USASpendingBulkClient:
         self.headers = {"User-Agent": settings.user_agent}
 
     def _submit_one(self, kind: str, payload: dict) -> USASpendingDownloadJob:
-        last_error: httpx.HTTPStatusError | None = None
+        last_error: Exception | None = None
         for attempt in range(3):
             try:
                 with httpx.Client(
@@ -121,6 +123,16 @@ class USASpendingBulkClient:
                 status_code = exc.response.status_code
                 retriable = status_code == 429 or status_code >= 500
                 if not retriable or attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+            except httpx.RequestError as exc:
+                # A generated-download submission can be dropped before any HTTP response is
+                # received (observed as RemoteProtocolError in live validation). Retrying can
+                # leave an unreferenced duplicate upstream job if the original request reached
+                # USAspending, but TaxTrace records/materializes only the successfully returned
+                # job, so this cannot duplicate local source facts.
+                last_error = exc
+                if attempt == 2:
                     raise
                 time.sleep(2**attempt)
         assert last_error is not None
@@ -193,11 +205,21 @@ class USASpendingBulkClient:
         fiscal_period = self._fiscal_period(filters)
         agencies = self.reporting_agencies(fiscal_year, fiscal_period)
         split_jobs: list[dict] = []
-        for agency in agencies:
+        for index, agency in enumerate(agencies):
             shard_payload = json.loads(json.dumps(payload))
             shard_payload["filters"]["agency"] = agency["abbreviation"]
-            shard = self._submit_one("accounts", shard_payload)
+            try:
+                shard = self._submit_one("accounts", shard_payload)
+            except (httpx.HTTPError, RuntimeError) as exc:
+                label = agency["abbreviation"]
+                name = agency.get("name") or "unknown agency"
+                raise RuntimeError(
+                    f"Failed to submit FY{fiscal_year} P{fiscal_period} File C shard "
+                    f"for {label} ({name}); refusing incomplete federal coverage"
+                ) from exc
             split_jobs.append(self._job_record(shard))
+            if len(agencies) > 5 and index < len(agencies) - 1:
+                time.sleep(SHARD_SUBMISSION_PACE_SECONDS)
 
         synthetic_name = f"FY{fiscal_year}P{fiscal_period}_TaxTrace_AgencySharded_FileC.zip"
         return USASpendingDownloadJob(
