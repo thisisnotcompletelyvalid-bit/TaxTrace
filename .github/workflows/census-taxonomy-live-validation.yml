@@ -57,7 +57,7 @@ jobs:
           source = root / '2022_Individual_Unit_File.zip'
           workbook_path = root / '22slsstab1.xlsx'
 
-          totals = defaultdict(lambda: Decimal('0.00'))
+          all_totals = defaultdict(lambda: Decimal('0.00'))
           records = 0
           governments = set()
           code_counts = Counter()
@@ -66,9 +66,13 @@ jobs:
               governments.add(record.government_id)
               code = record.item_code.upper()
               code_counts[code] += 1
-              if code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES:
-                  totals[code] += record.amount_dollars
+              all_totals[code] += record.amount_dollars
 
+          totals = {
+              code: all_totals[code]
+              for code in sorted(POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES)
+              if code_counts[code]
+          }
           direct_general = sum(totals.values(), Decimal('0.00'))
           audit = taxonomy_audit(2022)
           assert audit['valid'], audit
@@ -80,7 +84,7 @@ jobs:
               'records': records,
               'governments': len(governments),
               'direct_general_dollars': str(direct_general),
-              'active_codes_present': len([code for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES if code_counts[code]]),
+              'active_codes_present': len(totals),
               'active_codes_missing': sorted(code for code in POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES if not code_counts[code]),
               'historical_g_rows': sum(count for code, count in code_counts.items() if code.startswith('G')),
               'historical_k_rows': sum(count for code, count in code_counts.items() if code.startswith('K')),
@@ -89,19 +93,58 @@ jobs:
               'j85_rows': code_counts['J85'],
               'e27_rows': code_counts['E27'],
           })
+          print('ACTIVE_CODE_TOTALS_DOLLARS')
+          for code, amount in sorted(totals.items(), key=lambda item: item[1], reverse=True):
+              print('CODE_TOTAL', code, amount)
 
           workbook = load_workbook(workbook_path, read_only=True, data_only=True)
+          sheet = workbook[workbook.sheetnames[0]]
           print('WORKBOOK_SHEETS', workbook.sheetnames)
+          print('WORKBOOK_HEADER_ROWS')
+          for row_index in range(1, 16):
+              print('WORKBOOK_ROW', row_index, list(next(sheet.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))[:20])
+          print('WORKBOOK_CONTROL_NEIGHBORHOOD')
+          for row_index in range(82, 101):
+              print('WORKBOOK_ROW', row_index, list(next(sheet.iter_rows(min_row=row_index, max_row=row_index, values_only=True)))[:20])
+
           matches = []
-          for sheet in workbook.worksheets:
-              for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
-                  values = list(row)
-                  text = ' | '.join(str(value) for value in values if value is not None)
-                  normalized = text.lower().replace('-', ' ')
-                  if 'direct general' in normalized or 'general expenditure' in normalized:
-                      matches.append((sheet.title, row_index, values))
+          for row_index, row in enumerate(sheet.iter_rows(values_only=True), start=1):
+              values = list(row)
+              text = ' | '.join(str(value) for value in values if value is not None)
+              normalized = text.lower().replace('-', ' ')
+              if 'direct general' in normalized or 'general expenditure' in normalized:
+                  matches.append((row_index, values))
           print('DIRECT_GENERAL_MATCH_COUNT', len(matches))
-          for match in matches[:100]:
-              print('DIRECT_GENERAL_MATCH', match)
+          for match in matches:
+              print('DIRECT_GENERAL_MATCH', match[0], match[1][:20])
           assert matches, 'No Direct General Expenditure control row was found in 22slsstab1.xlsx'
+
+          direct_rows = [values for row_index, values in matches if any(
+              isinstance(value, str) and value.strip().lower() == 'direct general expenditure'
+              for value in values
+          )]
+          assert len(direct_rows) == 1, len(direct_rows)
+          published_thousands = Decimal(str(direct_rows[0][2]))
+          published_dollars = published_thousands * Decimal('1000')
+          difference = direct_general - published_dollars
+          print('RECONCILIATION', {
+              'taxtrace_dollars': str(direct_general),
+              'published_dollars': str(published_dollars),
+              'difference_dollars': str(difference),
+              'relative_difference': str(difference / published_dollars),
+          })
+
+          print('CANDIDATE_REMOVALS')
+          for code, amount in sorted(totals.items(), key=lambda item: abs(item[1] - difference))[:20]:
+              print('REMOVAL_CANDIDATE', code, amount, 'gap_after_removal', difference - amount)
+          for group in (
+              ('fire', ('E24', 'F24')),
+              ('interest', ('I89',)),
+              ('education_subsidy', ('J19',)),
+              ('fire_interest', ('E24', 'F24', 'I89')),
+              ('fire_subsidy', ('E24', 'F24', 'J19')),
+          ):
+              name, codes = group
+              amount = sum((all_totals[code] for code in codes), Decimal('0.00'))
+              print('GROUP_CANDIDATE', name, codes, amount, 'gap_after_removal', difference - amount)
           PY
