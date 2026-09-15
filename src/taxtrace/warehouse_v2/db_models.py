@@ -89,6 +89,49 @@ class GovernmentIdentifier(Base):
     )
 
 
+class JurisdictionRelation(Base):
+    """A versioned relationship between governments without forcing one parent tree."""
+
+    __tablename__ = "jurisdiction_relation"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    subject_jurisdiction_id: Mapped[int] = mapped_column(
+        ForeignKey("jurisdiction.id"), index=True
+    )
+    object_jurisdiction_id: Mapped[int] = mapped_column(
+        ForeignKey("jurisdiction.id"), index=True
+    )
+    relation_type: Mapped[str] = mapped_column(String(64), index=True)
+    dataset_release_id: Mapped[int | None] = mapped_column(
+        ForeignKey("dataset_release.id"), nullable=True, index=True
+    )
+    valid_from_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    valid_to_year: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_jurisdiction_id",
+            "object_jurisdiction_id",
+            "relation_type",
+            "dataset_release_id",
+            "valid_from_year",
+            "valid_to_year",
+            name="uq_jurisdiction_relation_source_period",
+        ),
+        Index(
+            "ix_jurisdiction_relation_subject_type",
+            "subject_jurisdiction_id",
+            "relation_type",
+        ),
+        Index(
+            "ix_jurisdiction_relation_object_type",
+            "object_jurisdiction_id",
+            "relation_type",
+        ),
+    )
+
+
 class FinanceClassification(Base):
     """Native and standardized finance classifications without forcing them into one tree."""
 
