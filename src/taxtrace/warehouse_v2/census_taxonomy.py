@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Iterable
 
-TAXONOMY_VERSION = "1.1.0"
+TAXONOMY_VERSION = "1.2.0"
 PARENT_KEY = "direct_general_expenditure"
 PARENT_LABEL = "Direct general expenditure"
 
@@ -36,69 +36,94 @@ class CensusFormula:
     notes: tuple[str, ...]
 
 
-# 2022 changed the native expenditure code system materially. Census combined
-# construction, land/buildings, and equipment capital categories into the F
-# family while retaining functionalization; G and K capital codes were
-# discontinued into F. Welfare vendor/cash-assistance detail was also collapsed
-# into E79, and environmental-health code 27 became an exhibit/recode rather
-# than part of the published aggregate formula.
+# Census's Summary Tabulations workbook defines SF0176, "Expenditure - Direct
+# Expenditure - Total General Expenditure", with an explicit native-code list.
+# For 2022, and again for 2023-2024, the list is the same 72 codes below.
 #
-# The active 2022 state formula supplies the post-change E/F/I/J code family.
-# Function 24 (fire protection) is additionally retained for the state+local
-# universe because it is a general-sector local-government function in the
-# state/local summary methodology. F24 represents its post-2022 consolidated
-# capital counterpart under Census's rule that F now contains all capital
-# expenditure while preserving functionalization.
-POST_2022_DIRECT_GENERAL_FUNCTION_CODES = frozenset(
+# Keep this list literal. In particular, do not infer parent membership from a
+# function suffix or an E/F prefix. The raw finance files contain expenditure-
+# shaped codes such as E24/F24 (fire protection), utility codes 91-94, and
+# liquor-store code 90 that are not members of the published SF0176 formula.
+POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES = frozenset(
     {
-        "01",
-        "03",
-        "04",
-        "05",
-        "12",
-        "16",
-        "18",
-        "21",
-        "22",
-        "23",
-        "24",
-        "25",
-        "26",
-        "29",
-        "31",
-        "32",
-        "36",
-        "44",
-        "45",
-        "50",
-        "52",
-        "54",
-        "55",
-        "56",
-        "59",
-        "60",
-        "61",
-        "62",
-        "66",
-        "77",
-        "79",
-        "80",
-        "81",
-        "85",
-        "87",
-        "89",
+        "E01",
+        "E03",
+        "E04",
+        "E05",
+        "E12",
+        "E16",
+        "E18",
+        "E21",
+        "E22",
+        "E23",
+        "E25",
+        "E26",
+        "E29",
+        "E31",
+        "E32",
+        "E36",
+        "E44",
+        "E45",
+        "E50",
+        "E52",
+        "E54",
+        "E55",
+        "E56",
+        "E59",
+        "E60",
+        "E61",
+        "E62",
+        "E66",
+        "E77",
+        "E79",
+        "E80",
+        "E81",
+        "E85",
+        "E87",
+        "E89",
+        "F01",
+        "F03",
+        "F04",
+        "F05",
+        "F12",
+        "F16",
+        "F18",
+        "F21",
+        "F22",
+        "F23",
+        "F25",
+        "F26",
+        "F29",
+        "F31",
+        "F32",
+        "F36",
+        "F44",
+        "F45",
+        "F50",
+        "F52",
+        "F54",
+        "F55",
+        "F56",
+        "F59",
+        "F60",
+        "F61",
+        "F62",
+        "F66",
+        "F77",
+        "F79",
+        "F80",
+        "F81",
+        "F85",
+        "F87",
+        "F89",
+        "I89",
+        "J19",
     }
 )
 
-POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES = frozenset(
-    {f"E{code}" for code in POST_2022_DIRECT_GENERAL_FUNCTION_CODES}
-    | {f"F{code}" for code in POST_2022_DIRECT_GENERAL_FUNCTION_CODES}
-    | {"I89", "J19"}
-)
-
 POST_2022_FORMULA = CensusFormula(
-    key="census-direct-general-post-2022",
-    label="Census direct general expenditure, post-2022 code system",
+    key="census-sf0176-direct-general-2022-2024",
+    label="Census SF0176 direct general expenditure, 2022-2024 code system",
     supported_years=frozenset({2022, 2024}),
     direct_general_codes=POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES,
     source_urls=(
@@ -108,10 +133,13 @@ POST_2022_FORMULA = CensusFormula(
         STATE_LOCAL_SUMMARY_METHODOLOGY_URL,
     ),
     notes=(
+        "Parent membership is the literal SF0176 ITEM_CODES_2022 / ITEM_CODES_2023_2024 list from Census's Summary Tabulations workbook.",
         "F is the consolidated capital-expenditure family effective 2022; G/K capital rows are not additive beside F.",
-        "E74/E75 and J67/J68 are discontinued into E79 for 2022; J85 was already discontinued into E85.",
-        "Environmental-health code 27 is excluded from the additive parent because 2022 treats it as an exhibit/recode into major functions.",
-        "Function 24 is included for the state/local universe as the local-government fire-protection function.",
+        "E74/E75 and J67/J68 are discontinued from this 2022 formula; J85 is not a member either.",
+        "Environmental-health code 27 is not a member of SF0176.",
+        "Fire-protection codes E24/F24 are reported in raw Census finance data but are not members of the published SF0176 direct-general formula.",
+        "Utility codes 91-94, liquor-store code 90, and their related interest/capital codes are outside this direct-general parent.",
+        "The current revised 2022 published national SF0176 control does not equal the sum of the current public-use native codes in the static methodology formula; TaxTrace records that as a source-level aggregate reconciliation issue rather than altering unit-level formula membership.",
     ),
 )
 
@@ -152,7 +180,6 @@ CATEGORIES = (
     CensusReceiptCategory("health", "Health", frozenset({"32"})),
     CensusReceiptCategory("hospitals", "Hospitals", frozenset({"36"})),
     CensusReceiptCategory("police", "Police protection", frozenset({"62"})),
-    CensusReceiptCategory("fire", "Fire protection", frozenset({"24"})),
     CensusReceiptCategory("corrections", "Corrections", frozenset({"04", "05"})),
     CensusReceiptCategory("judicial_legal", "Judicial and legal", frozenset({"25"})),
     CensusReceiptCategory(
