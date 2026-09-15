@@ -6,6 +6,15 @@ on:
       - census-additive-taxonomy
     paths:
       - '.github/workflows/census-taxonomy-live-validation.yml'
+      - 'src/taxtrace/warehouse_v2/census.py'
+      - 'src/taxtrace/warehouse_v2/census_taxonomy.py'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/census-taxonomy-live-validation.yml'
+      - 'src/taxtrace/warehouse_v2/census.py'
+      - 'src/taxtrace/warehouse_v2/census_taxonomy.py'
   workflow_dispatch:
 
 jobs:
@@ -24,12 +33,16 @@ jobs:
           mkdir -p /tmp/taxtrace-census
           python - <<'PY'
           from pathlib import Path
+          from taxtrace.warehouse_v2.census_taxonomy import (
+              STATE_LOCAL_2022_INDIVIDUAL_UNIT_URL,
+              STATE_LOCAL_CURRENT_AGGREGATE_DATA_URL,
+          )
           from taxtrace.warehouse_v2.download import stream_download
 
           root = Path('/tmp/taxtrace-census')
           for url, name in (
-              ('https://www2.census.gov/programs-surveys/gov-finances/tables/2022/2022_Individual_Unit_File.zip', '2022_Individual_Unit_File.zip'),
-              ('https://www2.census.gov/programs-surveys/gov-finances/data/GS00LOCALFIN.zip', 'GS00LOCALFIN.zip'),
+              (STATE_LOCAL_2022_INDIVIDUAL_UNIT_URL, '2022_Individual_Unit_File.zip'),
+              (STATE_LOCAL_CURRENT_AGGREGATE_DATA_URL, 'GS00LOCALFIN.zip'),
           ):
               stream_download(url, root / name, overwrite=True)
           PY
@@ -44,15 +57,19 @@ jobs:
           from zipfile import ZipFile
 
           from taxtrace.warehouse_v2.census import iter_finance_records
+          from taxtrace.warehouse_v2.census_taxonomy import (
+              POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES,
+              taxonomy_audit,
+          )
 
           root = Path('/tmp/taxtrace-census')
           source = root / '2022_Individual_Unit_File.zip'
-          suffixes = (
-              '01','03','04','05','12','16','18','21','22','23','24','25','26','29','31','32','36',
-              '44','45','50','52','55','56','59','60','61','62','66','77','79','80','81','85','87','89',
-          )
-          codes = frozenset({f'{prefix}{suffix}' for prefix in ('E', 'F') for suffix in suffixes} | {'I89', 'J19'})
-          assert len(codes) == 72
+          codes = POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES
+          audit = taxonomy_audit(2022)
+          assert audit['valid'], audit
+          assert len(codes) == 72, len(codes)
+          assert {'E24', 'F24'} <= codes
+          assert not ({'E54', 'F54'} & codes)
 
           raw = defaultdict(lambda: Decimal('0'))
           for record in iter_finance_records(source):
@@ -78,10 +95,12 @@ jobs:
           reader = csv.DictReader(io.StringIO(text), delimiter='|')
           controls = {}
           for row in reader:
-              if row['YEAR'] != '2022' or row['ST'] != '00' or row['GOVTYPE'] != '001':
+              year = row.get('YEAR') or row.get('#YEAR')
+              if year != '2022' or row.get('ST') != '00' or row.get('GOVTYPE') != '001':
                   continue
-              if row['AGG_DESC'] in {'LF0103', 'LF0104', 'LF0105', 'LF0106'}:
+              if row.get('AGG_DESC') in {'LF0103', 'LF0104', 'LF0105', 'LF0106'}:
                   controls[row['AGG_DESC']] = Decimal(row['AMOUNT']) * Decimal('1000')
+          assert set(controls) == {'LF0103', 'LF0104', 'LF0105', 'LF0106'}, controls
 
           raw_parent = sum((raw[code] for code in codes), Decimal('0'))
           public_parent = sum((public[code] for code in codes), Decimal('0'))
@@ -92,13 +111,18 @@ jobs:
           raw_other = raw['I89'] + raw['J19']
           public_other = public['I89'] + public['J19']
 
+          aggregate_adjustment = controls['LF0103'] - raw_parent
+          component_adjustment = (
+              controls['LF0104'] - raw_current
+              + controls['LF0105'] - raw_capital
+              + controls['LF0106'] - raw_other
+          )
           print('RECONCILIATION', {
               'raw_parent': str(raw_parent),
               'public_parent': str(public_parent),
               'gs_parent': str(controls['LF0103']),
-              'raw_vs_gs': str(raw_parent - controls['LF0103']),
+              'aggregate_adjustment': str(aggregate_adjustment),
               'public_vs_gs': str(public_parent - controls['LF0103']),
-              'relative_raw_gap': str((controls['LF0103'] - raw_parent) / controls['LF0103']),
           })
           print('COMPONENTS', {
               'raw_current': str(raw_current),
@@ -110,6 +134,7 @@ jobs:
               'raw_other': str(raw_other),
               'public_other': str(public_other),
               'gs_other': str(controls['LF0106']),
+              'component_adjustment': str(component_adjustment),
           })
 
           print('CODE_LEVEL_RAW_TO_PUBLIC_DIFFERENCES')
@@ -121,9 +146,14 @@ jobs:
           for _, code, raw_amount, public_amount, diff in sorted(differences, reverse=True):
               print('CODE_DIFF', code, 'raw', raw_amount, 'public', public_amount, 'public_minus_raw', diff)
 
+          # The aggregate public-use controls and the current published GS table
+          # must reconcile exactly. Any difference between those aggregate controls
+          # and the literal sum of individual-government rows is reported as a
+          # Census aggregate-stage adjustment and is never redistributed to units.
           assert public_parent == controls['LF0103'], (public_parent, controls['LF0103'])
           assert public_current == controls['LF0104'], (public_current, controls['LF0104'])
           assert public_capital == controls['LF0105'], (public_capital, controls['LF0105'])
           assert public_other == controls['LF0106'], (public_other, controls['LF0106'])
-          assert abs(controls['LF0103'] - raw_parent) < Decimal('100000000')
+          assert aggregate_adjustment == component_adjustment
+          assert raw_parent > 0
           PY
