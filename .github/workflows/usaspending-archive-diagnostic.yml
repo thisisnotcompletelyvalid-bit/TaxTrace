@@ -37,8 +37,6 @@ jobs:
               },
           }
 
-          # Call _submit_one deliberately so this diagnostic probes the native
-          # USAspending request shape without TaxTrace's File C transport sharding.
           client = USASpendingBulkClient(timeout=90)
           job = client._submit_one("accounts", payload)
           print("submitted", job.response)
@@ -51,10 +49,7 @@ jobs:
           assert downloaded.exists() and downloaded.stat().st_size > 0
 
           inspected = inspect_account_archive(downloaded)
-          print(
-              "members",
-              [(member.member_name, member.submission_type, len(member.columns)) for member in inspected],
-          )
+          print("members", [(member.member_name, member.submission_type, len(member.columns)) for member in inspected])
           assert inspected
           assert {member.submission_type for member in inspected} == {"C"}
 
@@ -65,5 +60,52 @@ jobs:
                       total_uncompressed += member.file_size
           print("archive_bytes", downloaded.stat().st_size)
           print("uncompressed_bytes", total_uncompressed)
+          print("source_grain", "federal_account_award")
+          PY
+
+  validate-treasury-federal-account-file-c:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -U pip && pip install -e '.[dev]'
+      - name: Generate real FY2025 P12 Treasury File C at federal-account grain
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
+          from taxtrace.warehouse_v2.usaspending_lake import inspect_account_archive
+
+          payload = {
+              "account_level": "federal_account",
+              "file_format": "csv",
+              "filters": {
+                  "agency": "22",
+                  "fy": "2025",
+                  "period": "12",
+                  "submission_types": ["award_financial"],
+              },
+          }
+
+          client = USASpendingBulkClient(timeout=90)
+          job = client._submit_one("accounts", payload)
+          print("submitted", job.response)
+          completed = client.wait(job, poll_seconds=3, max_polls=300)
+          print("completed", completed)
+          assert completed.get("status") == "finished", completed
+
+          destination = Path("data/raw/usaspending/fa-file-c-treasury-probe") / (job.file_name or "file-c.zip")
+          downloaded = client.download_completed(completed, destination)
+          assert downloaded.exists() and downloaded.stat().st_size > 0
+          inspected = inspect_account_archive(downloaded)
+          print("members", [(member.member_name, member.submission_type, len(member.columns)) for member in inspected])
+          assert inspected
+          assert {member.submission_type for member in inspected} == {"C"}
+          print("archive_bytes", downloaded.stat().st_size)
           print("source_grain", "federal_account_award")
           PY
