@@ -4,42 +4,120 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Iterable
 
-# U.S. Census Bureau, State and Local Government Finances:
-# Methodology for Summary Tabulations. The methodology publishes the detailed
-# item-code formulas used to construct direct general expenditure and its
-# function-level subtotals.
-CENSUS_SUMMARY_METHODOLOGY_URL = (
-    "https://www2.census.gov/programs-surveys/gov-finances/technical-documentation/"
-    "classification-manual/methodology_for_summary_tabulations.pdf"
-)
-TAXONOMY_VERSION = "1.0.0"
+TAXONOMY_VERSION = "1.1.0"
 PARENT_KEY = "direct_general_expenditure"
 PARENT_LABEL = "Direct general expenditure"
 
-# Exact Census formula for direct general expenditure. Do not infer this set
-# from prefixes: the source formula intentionally contains only selected
-# expenditure codes and includes special I/J items.
-DIRECT_GENERAL_EXPENDITURE_CODES = frozenset(
+STATE_LOCAL_SUMMARY_METHODOLOGY_URL = (
+    "https://www2.census.gov/programs-surveys/gov-finances/technical-documentation/"
+    "classification-manual/methodology_for_summary_tabulations.pdf"
+)
+STATE_2022_SUMMARY_METHODOLOGY_URL = (
+    "https://www2.census.gov/programs-surveys/state/technical-documentation/"
+    "methodology/methodology_summary_tabulations.xlsx"
+)
+STATE_2022_TECHNICAL_DOCUMENTATION_URL = (
+    "https://www2.census.gov/programs-surveys/state/technical-documentation/"
+    "complete-technical-documentation/statetechdoc2022.pdf"
+)
+STATE_LOCAL_2022_CONTENT_CHANGES_URL = (
+    "https://www2.census.gov/programs-surveys/gov-finances/tables/2022/"
+    "Summary%20of%20Content%20Changes%20for%20State%20and%20Local%20Government%20Finance%20Surveys.pdf"
+)
+
+
+@dataclass(frozen=True)
+class CensusFormula:
+    key: str
+    label: str
+    supported_years: frozenset[int]
+    direct_general_codes: frozenset[str]
+    source_urls: tuple[str, ...]
+    notes: tuple[str, ...]
+
+
+# 2022 changed the native expenditure code system materially. Census combined
+# construction, land/buildings, and equipment capital categories into the F
+# family while retaining functionalization; G and K capital codes were
+# discontinued into F. Welfare vendor/cash-assistance detail was also collapsed
+# into E79, and environmental-health code 27 became an exhibit/recode rather
+# than part of the published aggregate formula.
+#
+# The active 2022 state formula supplies the post-change E/F/I/J code family.
+# Function 24 (fire protection) is additionally retained for the state+local
+# universe because it is a general-sector local-government function in the
+# state/local summary methodology. F24 represents its post-2022 consolidated
+# capital counterpart under Census's rule that F now contains all capital
+# expenditure while preserving functionalization.
+POST_2022_DIRECT_GENERAL_FUNCTION_CODES = frozenset(
     {
-        # Current operations.
-        "E01", "E03", "E04", "E05", "E12", "E16", "E18", "E21", "E22",
-        "E23", "E24", "E25", "E26", "E29", "E31", "E32", "E36", "E44",
-        "E45", "E50", "E52", "E55", "E56", "E59", "E60", "E61", "E62",
-        "E66", "E74", "E75", "E77", "E79", "E80", "E81", "E85", "E87",
-        "E89",
-        # Construction.
-        "F01", "F03", "F04", "F05", "F12", "F16", "F18", "F21", "F22",
-        "F23", "F24", "F25", "F26", "F29", "F31", "F32", "F36", "F44",
-        "F45", "F50", "F52", "F55", "F56", "F59", "F60", "F61", "F62",
-        "F66", "F77", "F79", "F80", "F81", "F85", "F87", "F89",
-        # Other capital outlay.
-        "G01", "G03", "G04", "G05", "G12", "G16", "G18", "G21", "G22",
-        "G23", "G24", "G25", "G26", "G29", "G31", "G32", "G36", "G44",
-        "G45", "G50", "G52", "G55", "G56", "G59", "G60", "G61", "G62",
-        "G66", "G77", "G79", "G80", "G81", "G85", "G87", "G89",
-        # Interest on general debt and assistance/subsidies included by Census.
-        "I89", "J19", "J67", "J68", "J85",
+        "01",
+        "03",
+        "04",
+        "05",
+        "12",
+        "16",
+        "18",
+        "21",
+        "22",
+        "23",
+        "24",
+        "25",
+        "26",
+        "29",
+        "31",
+        "32",
+        "36",
+        "44",
+        "45",
+        "50",
+        "52",
+        "54",
+        "55",
+        "56",
+        "59",
+        "60",
+        "61",
+        "62",
+        "66",
+        "77",
+        "79",
+        "80",
+        "81",
+        "85",
+        "87",
+        "89",
     }
+)
+
+POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES = frozenset(
+    {f"E{code}" for code in POST_2022_DIRECT_GENERAL_FUNCTION_CODES}
+    | {f"F{code}" for code in POST_2022_DIRECT_GENERAL_FUNCTION_CODES}
+    | {"I89", "J19"}
+)
+
+POST_2022_FORMULA = CensusFormula(
+    key="census-direct-general-post-2022",
+    label="Census direct general expenditure, post-2022 code system",
+    supported_years=frozenset({2022, 2024}),
+    direct_general_codes=POST_2022_DIRECT_GENERAL_EXPENDITURE_CODES,
+    source_urls=(
+        STATE_2022_SUMMARY_METHODOLOGY_URL,
+        STATE_LOCAL_2022_CONTENT_CHANGES_URL,
+        STATE_2022_TECHNICAL_DOCUMENTATION_URL,
+        STATE_LOCAL_SUMMARY_METHODOLOGY_URL,
+    ),
+    notes=(
+        "F is the consolidated capital-expenditure family effective 2022; G/K capital rows are not additive beside F.",
+        "E74/E75 and J67/J68 are discontinued into E79 for 2022; J85 was already discontinued into E85.",
+        "Environmental-health code 27 is excluded from the additive parent because 2022 treats it as an exhibit/recode into major functions.",
+        "Function 24 is included for the state/local universe as the local-government fire-protection function.",
+    ),
+)
+
+FORMULAS = (POST_2022_FORMULA,)
+SUPPORTED_FISCAL_YEARS = frozenset(
+    year for formula in FORMULAS for year in formula.supported_years
 )
 
 
@@ -51,9 +129,9 @@ class CensusReceiptCategory:
     special_item_codes: frozenset[str] = frozenset()
 
 
-# These are TaxTrace presentation groups over the official Census direct-general
-# expenditure formula. The grouping never changes which native item codes enter
-# the additive parent; it only gives each included code exactly one public bucket.
+# TaxTrace presentation groups do not determine membership in the additive
+# parent. The year-specific Census formula does that first; these groups then
+# assign every included native code to exactly one public category.
 CATEGORIES = (
     CensusReceiptCategory(
         "general_government",
@@ -69,8 +147,7 @@ CATEGORIES = (
     CensusReceiptCategory(
         "public_welfare_human_services",
         "Public welfare and human services",
-        frozenset({"22", "74", "75", "77", "79", "85"}),
-        frozenset({"J67", "J68", "J85"}),
+        frozenset({"22", "77", "79", "85"}),
     ),
     CensusReceiptCategory("health", "Health", frozenset({"32"})),
     CensusReceiptCategory("hospitals", "Hospitals", frozenset({"36"})),
@@ -91,7 +168,7 @@ CATEGORIES = (
     CensusReceiptCategory(
         "natural_resources_environment",
         "Natural resources and environment",
-        frozenset({"55", "56", "59"}),
+        frozenset({"54", "55", "56", "59"}),
     ),
     CensusReceiptCategory("parks_recreation", "Parks and recreation", frozenset({"61"})),
     CensusReceiptCategory(
@@ -137,6 +214,8 @@ class CensusPartitionNode:
 @dataclass(frozen=True)
 class CensusExpenditurePartition:
     taxonomy_version: str
+    formula_key: str
+    fiscal_year: int
     parent_key: str
     parent_label: str
     parent_amount: Decimal
@@ -145,12 +224,27 @@ class CensusExpenditurePartition:
     residual_codes: tuple[str, ...]
     excluded_codes: tuple[str, ...]
     conservation_difference: Decimal
-    source_url: str
+    source_urls: tuple[str, ...]
+    formula_notes: tuple[str, ...]
 
 
-def category_for_item_code(item_code: str) -> CensusReceiptCategory | None:
+def formula_for_year(fiscal_year: int) -> CensusFormula:
+    matches = [formula for formula in FORMULAS if fiscal_year in formula.supported_years]
+    if len(matches) != 1:
+        raise ValueError(
+            f"No unique Census additive expenditure formula is implemented for fiscal year {fiscal_year}"
+        )
+    return matches[0]
+
+
+def category_for_item_code(
+    item_code: str,
+    *,
+    fiscal_year: int,
+) -> CensusReceiptCategory | None:
     code = item_code.strip().upper()
-    if code not in DIRECT_GENERAL_EXPENDITURE_CODES:
+    formula = formula_for_year(fiscal_year)
+    if code not in formula.direct_general_codes:
         return None
 
     # Special I/J items have object semantics that override their numeric suffix.
@@ -158,23 +252,21 @@ def category_for_item_code(item_code: str) -> CensusReceiptCategory | None:
         if code in category.special_item_codes:
             return category
 
-    # The regular function grouping applies only to Census E/F/G direct-general
-    # expenditure rows. Applying it to I89 would incorrectly treat general-debt
-    # interest as function 89 "other and unallocable."
-    if code[:1] in {"E", "F", "G"} and len(code) == 3:
+    if code[:1] in {"E", "F"} and len(code) == 3:
         for category in CATEGORIES:
             if code[1:] in category.function_codes:
                 return category
     return None
 
 
-def taxonomy_audit() -> dict[str, object]:
+def taxonomy_audit(fiscal_year: int) -> dict[str, object]:
+    formula = formula_for_year(fiscal_year)
     assignments: dict[str, list[str]] = {}
-    for code in sorted(DIRECT_GENERAL_EXPENDITURE_CODES):
-        category = category_for_item_code(code)
+    for code in sorted(formula.direct_general_codes):
+        category = category_for_item_code(code, fiscal_year=fiscal_year)
         if category is not None:
             assignments.setdefault(code, []).append(category.key)
-    missing = tuple(sorted(DIRECT_GENERAL_EXPENDITURE_CODES - assignments.keys()))
+    missing = tuple(sorted(formula.direct_general_codes - assignments.keys()))
     duplicates = {
         code: tuple(keys)
         for code, keys in assignments.items()
@@ -182,7 +274,9 @@ def taxonomy_audit() -> dict[str, object]:
     }
     return {
         "taxonomy_version": TAXONOMY_VERSION,
-        "official_parent_code_count": len(DIRECT_GENERAL_EXPENDITURE_CODES),
+        "formula_key": formula.key,
+        "fiscal_year": fiscal_year,
+        "official_parent_code_count": len(formula.direct_general_codes),
         "assigned_code_count": len(assignments),
         "missing_codes": missing,
         "duplicate_assignments": duplicates,
@@ -192,26 +286,29 @@ def taxonomy_audit() -> dict[str, object]:
 
 def build_expenditure_partition(
     rows: Iterable[CensusCodeAmount],
+    *,
+    fiscal_year: int,
 ) -> CensusExpenditurePartition:
+    formula = formula_for_year(fiscal_year)
     by_code: dict[str, Decimal] = {}
     excluded: set[str] = set()
     for row in rows:
         code = row.item_code.strip().upper()
         amount = Decimal(row.amount)
-        if code in DIRECT_GENERAL_EXPENDITURE_CODES:
-            by_code[code] = by_code.get(code, Decimal("0")) + amount
+        if code in formula.direct_general_codes:
+            by_code[code] = by_code.get(code, Decimal("0.00")) + amount
         else:
             excluded.add(code)
 
     category_codes: dict[str, list[str]] = {category.key: [] for category in CATEGORIES}
     category_amounts: dict[str, Decimal] = {
-        category.key: Decimal("0") for category in CATEGORIES
+        category.key: Decimal("0.00") for category in CATEGORIES
     }
     residual_codes: list[str] = []
-    residual_amount = Decimal("0")
+    residual_amount = Decimal("0.00")
 
     for code, amount in sorted(by_code.items()):
-        category = category_for_item_code(code)
+        category = category_for_item_code(code, fiscal_year=fiscal_year)
         if category is None:
             residual_codes.append(code)
             residual_amount += amount
@@ -229,10 +326,12 @@ def build_expenditure_partition(
         for category in CATEGORIES
         if category_amounts[category.key] != 0
     )
-    parent_amount = sum(by_code.values(), Decimal("0"))
-    child_total = sum((node.amount for node in nodes), Decimal("0")) + residual_amount
+    parent_amount = sum(by_code.values(), Decimal("0.00"))
+    child_total = sum((node.amount for node in nodes), Decimal("0.00")) + residual_amount
     return CensusExpenditurePartition(
         taxonomy_version=TAXONOMY_VERSION,
+        formula_key=formula.key,
+        fiscal_year=fiscal_year,
         parent_key=PARENT_KEY,
         parent_label=PARENT_LABEL,
         parent_amount=parent_amount,
@@ -241,5 +340,6 @@ def build_expenditure_partition(
         residual_codes=tuple(residual_codes),
         excluded_codes=tuple(sorted(excluded)),
         conservation_difference=parent_amount - child_total,
-        source_url=CENSUS_SUMMARY_METHODOLOGY_URL,
+        source_urls=formula.source_urls,
+        formula_notes=formula.notes,
     )
