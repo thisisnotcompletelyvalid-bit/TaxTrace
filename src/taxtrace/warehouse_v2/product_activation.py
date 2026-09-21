@@ -22,8 +22,7 @@ from taxtrace.warehouse_v2.census import bootstrap_national_census
 from taxtrace.warehouse_v2.census_lake import materialize_finance_parquet
 from taxtrace.warehouse_v2.db_models import BulkObject, DatasetDefinition, DatasetRelease
 from taxtrace.warehouse_v2.lake import LakeStore
-from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient
-from taxtrace.warehouse_v2.usaspending_lake import materialize_account_archive
+from taxtrace.warehouse_v2.usaspending_accounts import activate_federal_account_archives
 
 MIN_GOVERNMENT_REGISTRY_ROWS = 90_000
 MIN_CENSUS_2022_FINANCE_ROWS = 1_300_000
@@ -52,6 +51,7 @@ class ProductDataReadiness:
     national_state_local_ready: bool
     federal_core_ready: bool
     federal_account_detail_ready: bool
+    federal_account_sources_ready: bool
     government_registry: DatasetReadiness
     census_finance_2022: DatasetReadiness
     census_finance_2024: DatasetReadiness
@@ -207,6 +207,7 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
         and real_treasury_rows >= MIN_REAL_TREASURY_ROWS
     )
     account_detail_ready = account_statuses["B"].ready and account_statuses["C"].ready
+    account_sources_ready = all(account_statuses[key].ready for key in ("A", "B", "C"))
 
     if national_ready and federal_ready and account_detail_ready:
         mode = "NATIONAL_REAL_DATA_WITH_FEDERAL_DETAIL"
@@ -253,6 +254,7 @@ def product_data_readiness(session: Session, *, federal_fiscal_year: int = 2025)
         national_state_local_ready=national_ready,
         federal_core_ready=federal_ready,
         federal_account_detail_ready=account_detail_ready,
+        federal_account_sources_ready=account_sources_ready,
         government_registry=registry,
         census_finance_2022=census_2022,
         census_finance_2024=census_2024,
@@ -301,48 +303,12 @@ def _materialize_census_parquet(
 
 
 def _activate_federal_accounts(session: Session, *, fiscal_year: int) -> dict:
-    payload = {
-        "account_level": "treasury_account",
-        "file_format": "csv",
-        "filters": {
-            "agency": "all",
-            "fy": str(fiscal_year),
-            "period": "12",
-            "submission_types": [
-                "account_balances",
-                "object_class_program_activity",
-                "award_financial",
-            ],
-        },
-    }
-    client = USASpendingBulkClient()
-    job = client.submit("accounts", payload)
-    response = client.wait(job)
-    url = response.get("file_url") or response.get("download_url") or response.get("url")
-    if not url:
-        raise RuntimeError(f"Completed USAspending account download has no URL: {response}")
-    destination = (
-        get_settings().raw_data_dir
-        / "usaspending"
-        / str(fiscal_year)
-        / Path(url.split("?", 1)[0]).name
-    )
-    client.download_completed(response, destination)
-    result = materialize_account_archive(
+    """Activate exact USAspending source grains used by the federal product."""
+    return activate_federal_account_archives(
         session,
-        destination,
         fiscal_year=fiscal_year,
-        request=payload,
+        period=12,
     )
-    return {
-        "request": payload,
-        "download": {
-            "file_name": response.get("file_name") or response.get("filename"),
-            "status": response.get("status") or response.get("state"),
-            "local_path": str(destination),
-        },
-        "warehouse": result,
-    }
 
 
 def activate_product_data(
@@ -422,7 +388,7 @@ def activate_product_data(
 
     if include_federal_accounts:
         current = product_data_readiness(session, federal_fiscal_year=federal_fiscal_year)
-        if current.federal_account_detail_ready:
+        if current.federal_account_sources_ready:
             actions["federal_accounts"] = {"status": "already_ready"}
         else:
             actions["federal_accounts"] = _activate_federal_accounts(
