@@ -391,6 +391,15 @@ def test_status_does_not_retry_nontransient_client_error(
     assert calls == 1
 
 
+def test_verified_file_c_fallback_manifest_is_narrow() -> None:
+    assert set(bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS) == {
+        (2025, 12, 22),
+        (2025, 12, 24),
+    }
+    assert bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS[(2025, 12, 22)]["total_rows"] == 104154
+    assert bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS[(2025, 12, 24)]["total_rows"] == 5602
+
+
 def test_file_c_uses_only_exact_verified_treasury_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
