@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  validate-opm-federal-account-file-c:
+  validate-ncua-federal-account-file-c:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -19,7 +19,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: python -m pip install -U pip && pip install -e '.[dev]'
-      - name: Generate exact FY2025 P12 OPM File C at federal-account grain
+      - name: Generate exact FY2025 P12 NCUA File C at federal-account grain
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -31,7 +31,7 @@ jobs:
               "account_level": "federal_account",
               "file_format": "csv",
               "filters": {
-                  "agency": "24",
+                  "agency": "25",
                   "fy": "2025",
                   "period": "12",
                   "submission_types": ["award_financial"],
@@ -45,7 +45,7 @@ jobs:
           print("completed", completed)
           assert completed.get("status") == "finished", completed
 
-          destination = Path("data/raw/usaspending/fa-file-c-opm-probe") / (job.file_name or "file-c.zip")
+          destination = Path("data/raw/usaspending/fa-file-c-ncua-probe") / (job.file_name or "file-c.zip")
           client.download_completed(completed, destination)
           assert destination.exists() and destination.stat().st_size > 0
 
