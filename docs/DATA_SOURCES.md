@@ -48,17 +48,17 @@ Documentation: https://api.usaspending.gov/docs/endpoints
 
 ### DATA Act account files A/B/C
 
-The production account-data path uses `/api/v2/download/accounts/` at Treasury-account level. A completed-year release must preserve an exact request proving fiscal year and reporting period `12` before it can be used as full-year Federal Product V2 detail.
+The production account-data path uses `/api/v2/download/accounts/`, but not at one universal account level. Files A and B are requested at Treasury-account level. File C is requested separately at Federal Account × award grain because the TaxTrace award projection is controlled at federal-account scope. Every completed-year release must preserve its exact request proving fiscal year, reporting period `12`, and account level before it can be used as full-year Federal Product V2 detail.
 
 TaxTrace materializes the three DATA Act account grains separately:
 
 - **File A** — account balances;
 - **File B** — program activity × object class account detail;
-- **File C** — award-financial account detail.
+- **File C** — Federal Account × award financial detail, with Treasury-account monetary activity rolled up by USAspending upstream.
 
 These files are not additive to one another. File B may partition an already-attributed OMB account amount. File C may support only the conservative award projection defined by Federal Product V2. Neither creates a new top-level pool of spending.
 
-A single all-agency, full-year request containing A+B+C can be too large for USAspending's asynchronous generator and may fail server-side after being accepted. TaxTrace therefore treats this as a transport problem, not an accounting change: when an account request contains multiple submission types, the client submits one official job per submission type, waits for every component to reach a terminal success state, and streams the resulting official ZIP members into one local archive for the existing materializer. The original fiscal-year/period request remains the release provenance, while A/B/C continue to be registered as separate datasets.
+TaxTrace activates A/B and C as separate logical requests so their distinct source grains remain explicit. File C may then be transport-sharded across the exact FY/period reporting-agency universe when the all-agency generator is unreliable. Every agency shard is required; TaxTrace refuses incomplete federal coverage. The parent File C release retains the Federal Account-level FY/period request provenance, while the source catalog records that USAspending performed the TAS-to-federal-account rollup upstream.
 
 If USAspending reports an intermediate `ready` state, TaxTrace continues polling. It downloads only after a terminal success such as `finished`, because the generated object is not guaranteed to be retrievable earlier.
 
