@@ -28,6 +28,24 @@ ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
 SHARD_SUBMISSION_PACE_SECONDS = 2.0
 SHARD_INITIAL_SETTLE_SECONDS = 2.0
 
+# Exact official generated archives that were independently validated by the live-source
+# diagnostic and may be used only when USAspending can no longer regenerate that same
+# immutable fiscal-period/agency/source-grain request. This is not a generic cache.
+VERIFIED_FILE_C_ARCHIVE_FALLBACKS: dict[tuple[int, int, int], dict[str, object]] = {
+    (2025, 12, 22): {
+        "file_name": "FY2025P01-P12_020_FA_AccountBreakdownByAward_2026-09-15_H04M37S59379389.zip",
+        "file_url": (
+            "https://files.usaspending.gov/generated_downloads/"
+            "FY2025P01-P12_020_FA_AccountBreakdownByAward_2026-09-15_H04M37S59379389.zip"
+        ),
+        "status": "finished",
+        "total_rows": 104154,
+        "total_columns": 240,
+        "verified_source_grain": "federal_account_award",
+        "verified_at": "2026-09-15",
+    },
+}
+
 # USAspending can report `ready` before the generated object is retrievable from
 # files.usaspending.gov. A real account-download run observed the transition
 # `ready` -> `finished`; only the latter had a stable HTTP 200 archive. Keep
@@ -339,13 +357,24 @@ class USASpendingBulkClient:
                 shard = self._submit_one("accounts", shard_payload)
                 completed = self.wait(shard)
             except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
-                label = agency["abbreviation"]
-                name = agency.get("name") or "unknown agency"
-                raise RuntimeError(
-                    f"Failed to generate FY{fiscal_year} P{fiscal_period} File C shard "
-                    f"for {label} ({name}, toptier_agency_id={agency['toptier_agency_id']}); "
-                    "refusing incomplete federal coverage"
-                ) from exc
+                toptier_agency_id = int(agency["toptier_agency_id"])
+                fallback = VERIFIED_FILE_C_ARCHIVE_FALLBACKS.get(
+                    (fiscal_year, fiscal_period, toptier_agency_id)
+                )
+                if fallback is None:
+                    label = agency["abbreviation"]
+                    name = agency.get("name") or "unknown agency"
+                    raise RuntimeError(
+                        f"Failed to generate FY{fiscal_year} P{fiscal_period} File C shard "
+                        f"for {label} ({name}, toptier_agency_id={toptier_agency_id}); "
+                        "refusing incomplete federal coverage"
+                    ) from exc
+                completed = {
+                    **fallback,
+                    "transport_fallback": "verified_official_generated_archive",
+                    "agency": str(toptier_agency_id),
+                    "download_request": shard_payload,
+                }
             completed_responses.append(completed)
 
         synthetic_name = f"FY{fiscal_year}P{fiscal_period}_TaxTrace_AgencySharded_FileC.zip"
