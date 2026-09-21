@@ -27,6 +27,7 @@ REPORTING_AGENCIES_ENDPOINT = f"{API_ROOT}/reporting/agencies/overview/"
 ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
 SHARD_SUBMISSION_PACE_SECONDS = 2.0
 SHARD_INITIAL_SETTLE_SECONDS = 2.0
+TRANSIENT_HTTP_ATTEMPTS = 5
 
 # Exact official generated archives that were independently validated by the live-source
 # diagnostic and may be used only when USAspending can no longer regenerate that same
@@ -183,7 +184,7 @@ class USASpendingBulkClient:
 
     def _submit_one(self, kind: str, payload: dict) -> USASpendingDownloadJob:
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(TRANSIENT_HTTP_ATTEMPTS):
             try:
                 with httpx.Client(
                     timeout=self.timeout, follow_redirects=True, headers=self.headers
@@ -196,7 +197,7 @@ class USASpendingBulkClient:
                 last_error = exc
                 status_code = exc.response.status_code
                 retriable = status_code == 429 or status_code >= 500
-                if not retriable or attempt == 2:
+                if not retriable or attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
                     raise
                 time.sleep(2**attempt)
             except httpx.RequestError as exc:
@@ -206,7 +207,7 @@ class USASpendingBulkClient:
                 # USAspending, but TaxTrace records/materializes only the successfully returned
                 # job, so this cannot duplicate local source facts.
                 last_error = exc
-                if attempt == 2:
+                if attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
                     raise
                 time.sleep(2**attempt)
         assert last_error is not None
@@ -259,7 +260,7 @@ class USASpendingBulkClient:
     def account_agency_ids(self) -> dict[str, int]:
         """Return the official internal toptier agency IDs accepted by account downloads."""
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(TRANSIENT_HTTP_ATTEMPTS):
             try:
                 with httpx.Client(
                     timeout=self.timeout, follow_redirects=True, headers=self.headers
@@ -274,12 +275,12 @@ class USASpendingBulkClient:
                 last_error = exc
                 status_code = exc.response.status_code
                 retriable = status_code == 429 or status_code >= 500
-                if not retriable or attempt == 2:
+                if not retriable or attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
                     raise
                 time.sleep(2**attempt)
             except httpx.RequestError as exc:
                 last_error = exc
-                if attempt == 2:
+                if attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
                     raise
                 time.sleep(2**attempt)
         assert last_error is not None
@@ -447,7 +448,7 @@ class USASpendingBulkClient:
     def status(self, file_name: str) -> dict:
         """Fetch one USAspending job status with bounded transient transport retries."""
         last_error: Exception | None = None
-        for attempt in range(3):
+        for attempt in range(TRANSIENT_HTTP_ATTEMPTS):
             try:
                 with httpx.Client(
                     timeout=self.timeout, follow_redirects=True, headers=self.headers
@@ -459,12 +460,12 @@ class USASpendingBulkClient:
                 last_error = exc
                 code = exc.response.status_code
                 retriable = code == 429 or code >= 500
-                if not retriable or attempt == 2:
+                if not retriable or attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
                     raise
                 time.sleep(2**attempt)
             except httpx.RequestError as exc:
                 last_error = exc
-                if attempt == 2:
+                if attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
                     raise
                 time.sleep(2**attempt)
         assert last_error is not None
