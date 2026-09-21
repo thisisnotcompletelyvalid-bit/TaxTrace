@@ -89,26 +89,19 @@ def activate_federal_account_archives(
         )
     requests = federal_account_download_requests(fiscal_year, period)
 
-    # Submit both logical releases before waiting so A/B generation and the File C
-    # agency shards may run concurrently upstream.
-    jobs = {
-        key: client.submit("accounts", payload)
-        for key, payload in requests.items()
-    }
-
-    completed = {
-        key: client.wait(job)
-        for key, job in jobs.items()
-    }
-
     seed_catalog(session)
     downloads: dict[str, dict[str, object]] = {}
     warehouses: dict[str, dict[str, object]] = {}
     submission_files: dict[str, object] = {}
 
+    # Complete the TAS-level A/B release before starting the File C agency fleet.
+    # Live FY2025 runs showed that overlapping large account generators can cause
+    # submission-time disconnects on Treasury File C, while the same Federal Account
+    # request succeeds in isolation. Serializing the two logical source releases avoids
+    # upstream generator contention without changing either source grain.
     for key in ("A_B", "C"):
-        job = jobs[key]
-        response = completed[key]
+        job = client.submit("accounts", requests[key])
+        response = client.wait(job)
         destination = _destination_for_job(job, response, fiscal_year=fiscal_year)
         client.download_completed(response, destination)
         result = materialize_account_archive(
