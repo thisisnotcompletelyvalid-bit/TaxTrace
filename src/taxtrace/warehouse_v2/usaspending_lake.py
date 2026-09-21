@@ -94,6 +94,7 @@ def _release(
     *,
     fiscal_year: int,
     request: dict | None,
+    transport_metadata: dict | None,
 ) -> DatasetRelease:
     release_key = f"FY{fiscal_year}"
     row = session.scalar(
@@ -117,6 +118,8 @@ def _release(
     metadata = dict(row.metadata_json or {})
     if request is not None:
         metadata["download_request"] = request
+    if transport_metadata is not None:
+        metadata["transport"] = transport_metadata
     metadata["submission_file"] = (
         dataset.metadata_json.get("submission_file") if dataset.metadata_json else None
     )
@@ -131,6 +134,7 @@ def materialize_account_archive(
     *,
     fiscal_year: int,
     request: dict | None = None,
+    transport_metadata: dict | None = None,
     lake: LakeStore | None = None,
 ) -> dict[str, object]:
     """Materialize USAspending account bulk archive members as separate A/B/C Parquet grains."""
@@ -148,6 +152,7 @@ def materialize_account_archive(
             dataset,
             fiscal_year=fiscal_year,
             request=request,
+            transport_metadata=transport_metadata,
         )
     session.commit()
 
