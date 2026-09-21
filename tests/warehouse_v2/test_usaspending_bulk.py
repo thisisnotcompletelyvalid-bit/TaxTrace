@@ -328,11 +328,11 @@ def test_submit_does_not_retry_nontransient_client_error(monkeypatch: pytest.Mon
     assert calls == 1
 
 
-def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
+def test_file_c_all_agency_request_generates_current_reporting_agencies_sequentially(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
-    submitted: list[dict] = []
+    events: list[str] = []
     seen_period: list[tuple[int, int]] = []
 
     def fake_current_agencies(fiscal_year: int, fiscal_period: int) -> list[dict]:
@@ -342,8 +342,8 @@ def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
     monkeypatch.setattr(client, "current_reporting_account_agencies", fake_current_agencies)
 
     def fake_submit_one(kind: str, payload: dict) -> USASpendingDownloadJob:
-        submitted.append(payload)
         agency = payload["filters"]["agency"]
+        events.append(f"submit:{agency}")
         return USASpendingDownloadJob(
             kind=kind,
             request=payload,
@@ -353,29 +353,32 @@ def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
             },
         )
 
+    def fake_wait(job: USASpendingDownloadJob, **_kwargs) -> dict:
+        agency = job.request["filters"]["agency"]
+        events.append(f"wait:{agency}")
+        return {**job.response, "status": "finished", "total_rows": 1}
+
     monkeypatch.setattr(client, "_submit_one", fake_submit_one)
-    sleeps: list[float] = []
-    monkeypatch.setattr(bulk_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(client, "wait", fake_wait)
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda _seconds: events.append("sleep"))
+
     payload = _multi_type_payload()
+    payload["account_level"] = "federal_account"
     payload["filters"]["submission_types"] = ["award_financial"]
 
     job = client.submit("accounts", payload)
 
     assert seen_period == [(2025, 12)]
     assert job.file_name == "FY2025P12_TaxTrace_AgencySharded_FileC.zip"
-    assert job.response["split_strategy"] == "file_c_by_current_reporting_toptier_agency_id"
+    assert job.response["split_strategy"] == "file_c_sequential_current_reporting_toptier_agency_id"
     assert job.response["agency_count"] == 2
-    assert [item["filters"]["agency"] for item in submitted] == ["101", "202"]
-    assert all(item["filters"]["submission_types"] == ["award_financial"] for item in submitted)
+    assert job.response["status"] == "finished"
+    assert len(job.response["split_responses"]) == 2
+    assert events == ["submit:101", "wait:101", "sleep", "submit:202", "wait:202"]
     assert payload["filters"]["agency"] == "all"
-    assert len(job.response["split_jobs"]) == 2
-    # The two-agency fixture exercises the initial settling delay. Production
-    # universes larger than five agencies also use SHARD_SUBMISSION_PACE_SECONDS
-    # between every shard.
-    assert sleeps == [bulk_module.SHARD_INITIAL_SETTLE_SECONDS]
 
 
-def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
+def test_account_submit_splits_a_b_and_preserves_completed_file_c_component(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = USASpendingBulkClient(timeout=1)
@@ -400,6 +403,14 @@ def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
         )
 
     monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+
+    original_wait = client.wait
+    def fake_wait(job: USASpendingDownloadJob, **kwargs):
+        if job.request["filters"]["submission_types"] == ["award_financial"]:
+            return {**job.response, "status": "finished"}
+        return original_wait(job, **kwargs)
+
+    monkeypatch.setattr(client, "wait", fake_wait)
     monkeypatch.setattr(bulk_module.time, "sleep", lambda _seconds: None)
     original_payload = _multi_type_payload()
 
@@ -411,8 +422,8 @@ def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
         job.response["split_strategy"]
         == "submission_type_with_file_c_current_reporting_toptier_agency_id_shards"
     )
-    assert job.response["file_c_agency_count"] == 2
-    assert len(job.response["split_jobs"]) == 4
+    assert job.response["file_c_agency_count"] == 0
+    assert len(job.response["split_jobs"]) == 3
     assert [
         (
             payload["filters"]["submission_types"][0],
