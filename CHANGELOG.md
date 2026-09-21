@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.1 — 2026-09-14
+## 0.7.1 — 2026-09-21
 
 Made the real national data path an explicit product/deployment concern rather than an implicit manual prerequisite:
 
