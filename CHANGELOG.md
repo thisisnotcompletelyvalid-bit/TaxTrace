@@ -14,8 +14,8 @@ Made the real national data path an explicit product/deployment concern rather t
 - replaced the brittle current-year Treasury Combined Statement workbook ingestion path with machine-readable Fiscal Data MTS Table 9 detail and exact-dollar control reconciliation;
 - retained Treasury receipt/outlay totals only as non-additive controls and fail closed if source detail does not reproduce them exactly;
 - fixed current Typer CLI compatibility so top-level and federal-data commands construct correctly with the installed Typer version;
-- added resilient USAspending account transport: multi-submission A/B/C account requests are split into separate official asynchronous jobs, every component must reach terminal success, and their source members are streamed into one local archive before the unchanged A/B/C materializer runs;
-- preserved A/B/C as separate non-additive source grains and retained the original fiscal-year/reporting-period request as logical release provenance;
+- added resilient USAspending account activation with explicit product grains: File A/B remain Treasury Account-level while File C is requested at Federal Account × award grain, matching the conservative federal-account award projection;
+- added complete File C agency transport over the current reporting universe, preserving A/B/C as separate non-additive datasets and retaining each logical release's fiscal-year, reporting-period, and account-level provenance;
 - added a federal real-source release gate requiring current Treasury/OMB controls, full-year USAspending File B/C detail, local Parquet availability, substantive File B account matching, and exact Federal Product V2 receipt conservation;
 - expanded regression coverage for Treasury MTS controls, CLI construction, deployment readiness, split USAspending polling, and streaming ZIP composition.
 
