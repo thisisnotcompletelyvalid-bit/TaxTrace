@@ -328,6 +328,69 @@ def test_submit_does_not_retry_nontransient_client_error(monkeypatch: pytest.Mon
     assert calls == 1
 
 
+def test_status_retries_transient_transport_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    request = httpx.Request("GET", bulk_module.STATUS_ENDPOINT)
+    outcomes = [
+        httpx.RemoteProtocolError("server disconnected", request=request),
+        httpx.ConnectError("temporary connect failure", request=request),
+        httpx.Response(200, request=request, json={"status": "finished", "file_name": "x.zip"}),
+    ]
+    calls = 0
+    sleeps: list[float] = []
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url: str, params: dict):
+            nonlocal calls
+            assert params == {"file_name": "x.zip"}
+            calls += 1
+            outcome = outcomes.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(bulk_module.httpx, "Client", lambda **_kwargs: FakeClient())
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    client = USASpendingBulkClient(timeout=1)
+    result = client.status("x.zip")
+
+    assert result["status"] == "finished"
+    assert calls == 3
+    assert sleeps == [1, 2]
+
+
+def test_status_does_not_retry_nontransient_client_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = httpx.Request("GET", bulk_module.STATUS_ENDPOINT)
+    calls = 0
+
+    class FakeClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def get(self, _url: str, params: dict):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(404, request=request, json={"detail": "missing"})
+
+    monkeypatch.setattr(bulk_module.httpx, "Client", lambda **_kwargs: FakeClient())
+
+    client = USASpendingBulkClient(timeout=1)
+    with pytest.raises(httpx.HTTPStatusError):
+        client.status("x.zip")
+    assert calls == 1
+
+
 def test_file_c_all_agency_request_generates_current_reporting_agencies_sequentially(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
