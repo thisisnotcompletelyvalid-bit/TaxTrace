@@ -25,7 +25,8 @@ DOWNLOAD_ENDPOINTS = {
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
 REPORTING_AGENCIES_ENDPOINT = f"{API_ROOT}/reporting/agencies/overview/"
 ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
-SHARD_SUBMISSION_PACE_SECONDS = 0.25
+SHARD_SUBMISSION_PACE_SECONDS = 2.0
+SHARD_INITIAL_SETTLE_SECONDS = 2.0
 
 # USAspending can report `ready` before the generated object is retrievable from
 # files.usaspending.gov. A real account-download run observed the transition
@@ -320,6 +321,13 @@ class USASpendingBulkClient:
         fiscal_period = self._fiscal_period(filters)
         agencies = self.current_reporting_account_agencies(fiscal_year, fiscal_period)
         split_jobs: list[dict] = []
+        if len(agencies) > 1:
+            # The account-download submission endpoint can drop connections when a burst of
+            # asynchronous generator jobs follows the A/B submissions immediately. Live FY2025
+            # runs failed on different early agencies, while the same Treasury Federal Account
+            # File C request succeeded in isolation. Give the service a short settling interval
+            # and pace every subsequent shard without weakening the all-agency coverage gate.
+            time.sleep(SHARD_INITIAL_SETTLE_SECONDS)
         for index, agency in enumerate(agencies):
             shard_payload = json.loads(json.dumps(payload))
             shard_payload["filters"]["agency"] = str(agency["toptier_agency_id"])
