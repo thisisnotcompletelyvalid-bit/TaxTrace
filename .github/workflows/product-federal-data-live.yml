@@ -11,6 +11,8 @@ on:
       - 'src/taxtrace/finance/sources/treasury.py'
       - 'src/taxtrace/warehouse_v2/product_activation.py'
       - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
+      - 'src/taxtrace/warehouse_v2/usaspending_accounts.py'
+      - 'src/taxtrace/data/source_catalog_v2.json'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
       - 'src/taxtrace/warehouse_v2/federal_receipt.py'
   pull_request:
@@ -23,6 +25,8 @@ on:
       - 'src/taxtrace/finance/sources/treasury.py'
       - 'src/taxtrace/warehouse_v2/product_activation.py'
       - 'src/taxtrace/warehouse_v2/usaspending_bulk.py'
+      - 'src/taxtrace/warehouse_v2/usaspending_accounts.py'
+      - 'src/taxtrace/data/source_catalog_v2.json'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
       - 'src/taxtrace/warehouse_v2/federal_receipt.py'
   workflow_dispatch:
@@ -73,7 +77,10 @@ jobs:
           from taxtrace.allocation.models import FederalReceiptRequest
           from taxtrace.database import SessionLocal
           from taxtrace.enums import FilingStatus
+          from sqlalchemy import select
+
           from taxtrace.search import rebuild_search_index
+          from taxtrace.warehouse_v2.db_models import DatasetDefinition, DatasetRelease
           from taxtrace.warehouse_v2.federal_receipt import FederalReceiptV2Engine
           from taxtrace.warehouse_v2.product_activation import product_data_readiness
 
@@ -93,6 +100,7 @@ jobs:
 
               assert status.federal_core_ready is True, status
               assert status.federal_account_detail_ready is True, status
+              assert status.federal_account_sources_ready is True, status
               assert status.real_omb_account_rows >= 500, status
 
               assert status.usaspending_file_a.full_fiscal_year is True, status
@@ -118,6 +126,29 @@ jobs:
                   == status.usaspending_file_c.parquet_objects
                   > 0
               ), status
+
+              expected_source_grains = {
+                  'usaspending-file-a': ('treasury_account_balance', 'treasury_account'),
+                  'usaspending-file-b': ('treasury_account_program_activity_object_class', 'treasury_account'),
+                  'usaspending-file-c': ('federal_account_award', 'federal_account'),
+              }
+              for dataset_key, (expected_grain, expected_level) in expected_source_grains.items():
+                  dataset, release = session.execute(
+                      select(DatasetDefinition, DatasetRelease)
+                      .join(DatasetRelease, DatasetRelease.dataset_id == DatasetDefinition.id)
+                      .where(
+                          DatasetDefinition.key == dataset_key,
+                          DatasetRelease.release_key == 'FY2025',
+                          DatasetRelease.status == 'READY',
+                      )
+                  ).one()
+                  download_request = (release.metadata_json or {}).get('download_request') or {}
+                  assert dataset.grain == expected_grain, (dataset_key, dataset.grain)
+                  assert download_request.get('account_level') == expected_level, (
+                      dataset_key,
+                      download_request,
+                  )
+                  assert str((download_request.get('filters') or {}).get('period')) == '12', download_request
 
               receipt = FederalReceiptV2Engine().calculate(session, request)
               assert receipt.warehouse.status == 'READY', receipt.warehouse
