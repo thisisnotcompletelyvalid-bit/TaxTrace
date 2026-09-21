@@ -354,6 +354,8 @@ def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
         )
 
     monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    sleeps: list[float] = []
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda seconds: sleeps.append(seconds))
     payload = _multi_type_payload()
     payload["filters"]["submission_types"] = ["award_financial"]
 
@@ -367,6 +369,10 @@ def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
     assert all(item["filters"]["submission_types"] == ["award_financial"] for item in submitted)
     assert payload["filters"]["agency"] == "all"
     assert len(job.response["split_jobs"]) == 2
+    assert sleeps == [
+        bulk_module.SHARD_INITIAL_SETTLE_SECONDS,
+        bulk_module.SHARD_SUBMISSION_PACE_SECONDS,
+    ]
 
 
 def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
@@ -394,6 +400,7 @@ def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
         )
 
     monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda _seconds: None)
     original_payload = _multi_type_payload()
 
     job = client.submit("accounts", original_payload)
@@ -457,6 +464,8 @@ def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) 
             "total_rows": 1,
         },
     )
+
+    monkeypatch.setattr(bulk_module.time, "sleep", lambda _seconds: None)
 
     result = client.wait(
         client.submit("accounts", _multi_type_payload()),
