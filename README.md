@@ -155,7 +155,7 @@ The initializer can populate the national Census registry/finance baseline, real
 
 The standard Docker Compose stack includes the same one-shot initializer before the API. Database, raw-data, and warehouse-lake locations must use persistent storage if the populated deployment is expected to survive container recreation.
 
-Full-year all-agency USAspending A+B+C generation is handled as separate official submission-type jobs when necessary. This is transport sharding only. File A, B, and C remain separate non-additive source grains and the logical release retains its fiscal-year/period-12 provenance.
+Full-year USAspending activation uses two explicit product source grains: File A/B remain Treasury Account-level, while File C is requested at Federal Account × award grain because TaxTrace's conservative award projection is controlled at the federal-account level. File C may be transport-sharded across the exact current reporting-agency universe, but every shard must succeed. Each logical release retains its own fiscal-year/period-12 request provenance, and A/B/C remain non-additive.
 
 See `docs/REAL_DATA_ACTIVATION.md` and `docs/DATA_SOURCES.md` for the deployment and source contracts.
 
