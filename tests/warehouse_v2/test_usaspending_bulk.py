@@ -369,10 +369,10 @@ def test_file_c_all_agency_request_shards_by_current_reporting_toptier_id(
     assert all(item["filters"]["submission_types"] == ["award_financial"] for item in submitted)
     assert payload["filters"]["agency"] == "all"
     assert len(job.response["split_jobs"]) == 2
-    assert sleeps == [
-        bulk_module.SHARD_INITIAL_SETTLE_SECONDS,
-        bulk_module.SHARD_SUBMISSION_PACE_SECONDS,
-    ]
+    # The two-agency fixture exercises the initial settling delay. Production
+    # universes larger than five agencies also use SHARD_SUBMISSION_PACE_SECONDS
+    # between every shard.
+    assert sleeps == [bulk_module.SHARD_INITIAL_SETTLE_SECONDS]
 
 
 def test_account_submit_splits_a_b_and_flattens_file_c_toptier_id_shards(
