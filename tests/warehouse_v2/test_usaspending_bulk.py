@@ -391,6 +391,75 @@ def test_status_does_not_retry_nontransient_client_error(
     assert calls == 1
 
 
+def test_file_c_uses_only_exact_verified_treasury_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    monkeypatch.setattr(
+        client,
+        "current_reporting_account_agencies",
+        lambda _year, _period: [
+            {
+                "toptier_code": "020",
+                "abbreviation": "TREAS",
+                "name": "Department of the Treasury",
+                "toptier_agency_id": 22,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        client,
+        "_submit_one",
+        lambda _kind, _payload: (_ for _ in ()).throw(RuntimeError("generator unavailable")),
+    )
+
+    payload = _multi_type_payload()
+    payload["account_level"] = "federal_account"
+    payload["filters"]["submission_types"] = ["award_financial"]
+
+    job = client.submit("accounts", payload)
+
+    assert job.response["status"] == "finished"
+    assert job.response["agency_count"] == 1
+    shard = job.response["split_responses"][0]
+    assert shard["transport_fallback"] == "verified_official_generated_archive"
+    assert shard["agency"] == "22"
+    assert shard["total_rows"] == 104154
+    assert shard["verified_source_grain"] == "federal_account_award"
+    assert shard["download_request"]["account_level"] == "federal_account"
+    assert shard["download_request"]["filters"]["period"] == "12"
+
+
+def test_file_c_unverified_agency_failure_still_aborts_coverage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    monkeypatch.setattr(
+        client,
+        "current_reporting_account_agencies",
+        lambda _year, _period: [
+            {
+                "toptier_code": "999",
+                "abbreviation": "OTHER",
+                "name": "Other Agency",
+                "toptier_agency_id": 999,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        client,
+        "_submit_one",
+        lambda _kind, _payload: (_ for _ in ()).throw(RuntimeError("generator unavailable")),
+    )
+
+    payload = _multi_type_payload()
+    payload["account_level"] = "federal_account"
+    payload["filters"]["submission_types"] = ["award_financial"]
+
+    with pytest.raises(RuntimeError, match="refusing incomplete federal coverage"):
+        client.submit("accounts", payload)
+
+
 def test_file_c_all_agency_request_generates_current_reporting_agencies_sequentially(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
