@@ -71,6 +71,34 @@ def _destination_for_job(
     return get_settings().raw_data_dir / "usaspending" / str(fiscal_year) / Path(file_name).name
 
 
+def _transport_manifest(response: dict) -> dict[str, object]:
+    components = response.get("split_responses") or []
+    manifest_components: list[dict[str, object]] = []
+    for component in components:
+        manifest_components.append(
+            {
+                key: component.get(key)
+                for key in (
+                    "file_name",
+                    "file_url",
+                    "status",
+                    "total_rows",
+                    "total_columns",
+                    "agency",
+                    "transport_fallback",
+                    "verified_source_grain",
+                    "verified_at",
+                )
+                if component.get(key) is not None
+            }
+        )
+    return {
+        "split_strategy": response.get("split_strategy"),
+        "agency_count": response.get("agency_count"),
+        "components": manifest_components,
+    }
+
+
 def activate_federal_account_archives(
     session: Session,
     *,
@@ -109,6 +137,7 @@ def activate_federal_account_archives(
             destination,
             fiscal_year=fiscal_year,
             request=requests[key],
+            transport_metadata=_transport_manifest(response),
         )
         downloads[key] = {
             "file_name": response.get("file_name") or response.get("filename") or job.file_name,
