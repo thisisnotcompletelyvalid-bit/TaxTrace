@@ -9,6 +9,8 @@ from taxtrace.warehouse_v2.catalog import seed_catalog
 from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient, USASpendingDownloadJob
 from taxtrace.warehouse_v2.usaspending_lake import materialize_account_archive
 
+ACCOUNT_ACTIVATION_HTTP_TIMEOUT_SECONDS = 90.0
+
 
 def federal_account_download_requests(
     fiscal_year: int,
@@ -80,7 +82,11 @@ def activate_federal_account_archives(
     if period < 1 or period > 12:
         raise ValueError("period must be between 1 and 12")
 
-    client = client or USASpendingBulkClient()
+    if client is None:
+        settings = get_settings()
+        client = USASpendingBulkClient(
+            timeout=max(settings.http_timeout_seconds, ACCOUNT_ACTIVATION_HTTP_TIMEOUT_SECONDS)
+        )
     requests = federal_account_download_requests(fiscal_year, period)
 
     # Submit both logical releases before waiting so A/B generation and the File C
