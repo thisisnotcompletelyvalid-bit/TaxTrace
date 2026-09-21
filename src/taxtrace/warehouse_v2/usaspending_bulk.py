@@ -316,46 +316,49 @@ class USASpendingBulkClient:
         raise ValueError("File C agency sharding requires a fiscal period or quarter")
 
     def _submit_file_c_agency_shards(self, payload: dict) -> USASpendingDownloadJob:
+        """Generate complete File C coverage with only one agency job outstanding at a time.
+
+        USAspending's account generator has repeatedly dropped Treasury File C submissions
+        when TaxTrace first queued a fleet of agency jobs. The identical Treasury Federal
+        Account request succeeds when generated in isolation. Keep the source partition
+        unchanged, but serialize each current-period agency through submit -> terminal
+        success before creating the next job. Every agency must still succeed.
+        """
         filters = payload.get("filters") or {}
         fiscal_year = int(filters["fy"])
         fiscal_period = self._fiscal_period(filters)
         agencies = self.current_reporting_account_agencies(fiscal_year, fiscal_period)
-        split_jobs: list[dict] = []
-        if len(agencies) > 1:
-            # The account-download submission endpoint can drop connections when a burst of
-            # asynchronous generator jobs follows the A/B submissions immediately. Live FY2025
-            # runs failed on different early agencies, while the same Treasury Federal Account
-            # File C request succeeded in isolation. Give the service a short settling interval
-            # and pace every subsequent shard without weakening the all-agency coverage gate.
-            time.sleep(SHARD_INITIAL_SETTLE_SECONDS)
+        completed_responses: list[dict] = []
+
         for index, agency in enumerate(agencies):
             shard_payload = json.loads(json.dumps(payload))
             shard_payload["filters"]["agency"] = str(agency["toptier_agency_id"])
+            if index > 0:
+                time.sleep(SHARD_SUBMISSION_PACE_SECONDS)
             try:
                 shard = self._submit_one("accounts", shard_payload)
-            except (httpx.HTTPError, RuntimeError) as exc:
+                completed = self.wait(shard)
+            except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
                 label = agency["abbreviation"]
                 name = agency.get("name") or "unknown agency"
                 raise RuntimeError(
-                    f"Failed to submit FY{fiscal_year} P{fiscal_period} File C shard "
+                    f"Failed to generate FY{fiscal_year} P{fiscal_period} File C shard "
                     f"for {label} ({name}, toptier_agency_id={agency['toptier_agency_id']}); "
                     "refusing incomplete federal coverage"
                 ) from exc
-            split_jobs.append(self._job_record(shard))
-            if len(agencies) > 5 and index < len(agencies) - 1:
-                time.sleep(SHARD_SUBMISSION_PACE_SECONDS)
+            completed_responses.append(completed)
 
         synthetic_name = f"FY{fiscal_year}P{fiscal_period}_TaxTrace_AgencySharded_FileC.zip"
         return USASpendingDownloadJob(
             kind="accounts",
             request=payload,
             response={
-                "status": "submitted",
+                "status": "finished",
                 "file_name": synthetic_name,
                 "file_url": f"taxtrace-split://{synthetic_name}",
-                "split_strategy": "file_c_by_current_reporting_toptier_agency_id",
+                "split_strategy": "file_c_sequential_current_reporting_toptier_agency_id",
                 "agency_count": len(agencies),
-                "split_jobs": split_jobs,
+                "split_responses": completed_responses,
             },
         )
 
@@ -427,6 +430,12 @@ class USASpendingBulkClient:
         poll_seconds: float = 5,
         max_polls: int = 240,
     ) -> dict:
+        split_responses = job.response.get("split_responses") or []
+        if split_responses:
+            state = str(job.response.get("status") or "").lower()
+            if state in TERMINAL_SUCCESS_STATES:
+                return job.response
+
         split_jobs = job.response.get("split_jobs") or []
         if split_jobs:
             completed: list[dict] = []
