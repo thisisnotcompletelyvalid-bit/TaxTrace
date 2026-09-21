@@ -43,10 +43,12 @@ class _FakeClient:
         self.submitted: list[dict] = []
         self.waited: list[dict] = []
         self.downloaded: list[Path] = []
+        self.events: list[str] = []
 
     def submit(self, kind: str, payload: dict) -> USASpendingDownloadJob:
         assert kind == "accounts"
         self.submitted.append(payload)
+        self.events.append(f"submit:{payload['account_level']}")
         label = "ab" if payload["account_level"] == "treasury_account" else "c"
         return USASpendingDownloadJob(
             kind="accounts",
@@ -59,12 +61,14 @@ class _FakeClient:
 
     def wait(self, job: USASpendingDownloadJob) -> dict:
         self.waited.append(job.request)
+        self.events.append(f"wait:{job.request['account_level']}")
         return {**job.response, "status": "finished"}
 
     def download_completed(self, response: dict, destination: Path) -> Path:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(b"fake")
         self.downloaded.append(destination)
+        self.events.append(f"download:{destination.name}")
         return destination
 
 
@@ -85,6 +89,7 @@ def test_activation_materializes_ab_and_c_with_their_exact_requests(
         assert fiscal_year == 2025
         assert zip_path.exists()
         seen_requests.append(request)
+        fake.events.append(f"materialize:{request['account_level']}")
         if request["account_level"] == "treasury_account":
             files = {
                 "A": {"rows": 2, "parquet_objects": ["a.parquet"]},
@@ -115,3 +120,13 @@ def test_activation_materializes_ab_and_c_with_their_exact_requests(
     assert result["requests"]["A_B"]["account_level"] == "treasury_account"
     assert result["requests"]["C"]["account_level"] == "federal_account"
     assert len(fake.downloaded) == 2
+    assert fake.events == [
+        "submit:treasury_account",
+        "wait:treasury_account",
+        "download:ab.zip",
+        "materialize:treasury_account",
+        "submit:federal_account",
+        "wait:federal_account",
+        "download:c.zip",
+        "materialize:federal_account",
+    ]
