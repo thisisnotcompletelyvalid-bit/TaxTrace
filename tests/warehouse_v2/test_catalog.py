@@ -6,7 +6,7 @@ from taxtrace.warehouse_v2.db_models import DatasetDefinition
 
 def test_catalog_contains_national_and_federal_backbones(db_session):
     catalog = load_catalog()
-    assert catalog["catalog_version"] == "2.2.0"
+    assert catalog["catalog_version"] == "2.3.0"
     by_key = {row["key"]: row for row in catalog["sources"]}
     assert "census-government-units-2022" in by_key
     assert "census-gov-finance-2022" in by_key
