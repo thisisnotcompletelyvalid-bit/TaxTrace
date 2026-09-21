@@ -485,8 +485,12 @@ def test_wait_completes_all_split_account_jobs(monkeypatch: pytest.MonkeyPatch) 
     )
 
     assert result["status"] == "finished"
-    assert len(result["split_responses"]) == 4
+    assert len(result["split_responses"]) == 3
     assert all(item["status"] == "finished" for item in result["split_responses"])
+    file_c = result["split_responses"][2]
+    assert file_c["split_strategy"] == "file_c_sequential_current_reporting_toptier_agency_id"
+    assert len(file_c["split_responses"]) == 2
+    assert all(item["status"] == "finished" for item in file_c["split_responses"])
 
 
 def test_download_completed_streams_split_archives_into_one_zip(
