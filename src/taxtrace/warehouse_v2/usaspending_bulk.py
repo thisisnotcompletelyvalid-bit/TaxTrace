@@ -416,12 +416,30 @@ class USASpendingBulkClient:
         return self._submit_one(kind, payload)
 
     def status(self, file_name: str) -> dict:
-        with httpx.Client(
-            timeout=self.timeout, follow_redirects=True, headers=self.headers
-        ) as client:
-            response = client.get(STATUS_ENDPOINT, params={"file_name": file_name})
-            response.raise_for_status()
-            return response.json()
+        """Fetch one USAspending job status with bounded transient transport retries."""
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout, follow_redirects=True, headers=self.headers
+                ) as client:
+                    response = client.get(STATUS_ENDPOINT, params={"file_name": file_name})
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                code = exc.response.status_code
+                retriable = code == 429 or code >= 500
+                if not retriable or attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == 2:
+                    raise
+                time.sleep(2**attempt)
+        assert last_error is not None
+        raise last_error
 
     def wait(
         self,
