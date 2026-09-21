@@ -77,6 +77,7 @@ def test_activation_materializes_ab_and_c_with_their_exact_requests(
 ) -> None:
     fake = _FakeClient()
     seen_requests: list[dict] = []
+    seen_transport: list[dict] = []
 
     monkeypatch.setattr(
         accounts_module,
@@ -84,11 +85,20 @@ def test_activation_materializes_ab_and_c_with_their_exact_requests(
         lambda: SimpleNamespace(raw_data_dir=tmp_path / "raw"),
     )
 
-    def fake_materialize(session, zip_path, *, fiscal_year, request, lake=None):
+    def fake_materialize(
+        session,
+        zip_path,
+        *,
+        fiscal_year,
+        request,
+        transport_metadata=None,
+        lake=None,
+    ):
         assert session is db_session
         assert fiscal_year == 2025
         assert zip_path.exists()
         seen_requests.append(request)
+        seen_transport.append(transport_metadata or {})
         fake.events.append(f"materialize:{request['account_level']}")
         if request["account_level"] == "treasury_account":
             files = {
@@ -116,6 +126,8 @@ def test_activation_materializes_ab_and_c_with_their_exact_requests(
     assert fake.submitted == [expected["A_B"], expected["C"]]
     assert fake.waited == [expected["A_B"], expected["C"]]
     assert seen_requests == [expected["A_B"], expected["C"]]
+    assert len(seen_transport) == 2
+    assert all("components" in manifest for manifest in seen_transport)
     assert set(result["warehouse"]["submission_files"]) == {"A", "B", "C"}
     assert result["requests"]["A_B"]["account_level"] == "treasury_account"
     assert result["requests"]["C"]["account_level"] == "federal_account"
