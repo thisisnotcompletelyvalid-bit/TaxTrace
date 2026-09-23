@@ -487,6 +487,66 @@ def test_file_c_stale_cached_job_is_resubmitted_with_complete_columns(
     assert result["download_request"]["filters"] == payload["filters"]
 
 
+def test_file_c_unavailable_canonical_status_uses_complete_column_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    payload = {
+        "account_level": "federal_account",
+        "file_format": "csv",
+        "filters": {
+            "agency": "14",
+            "fy": "2025",
+            "period": "12",
+            "submission_types": ["award_financial"],
+        },
+    }
+    submitted: list[dict] = []
+
+    def fake_submit_one(kind: str, candidate: dict) -> USASpendingDownloadJob:
+        submitted.append(candidate)
+        file_name = "opaque.zip" if len(submitted) == 1 else "fresh.zip"
+        return USASpendingDownloadJob(
+            kind=kind,
+            request=candidate,
+            response={
+                "status_url": f"https://api.usaspending.gov/status?file_name={file_name}",
+                "file_name": file_name,
+                "file_url": f"https://files.usaspending.gov/generated_downloads/{file_name}",
+                "download_request": candidate,
+            },
+        )
+
+    def fake_status(file_name: str) -> dict:
+        if file_name == "opaque.zip":
+            request = httpx.Request("GET", bulk_module.STATUS_ENDPOINT)
+            raise httpx.RemoteProtocolError(
+                "Server disconnected without sending a response",
+                request=request,
+            )
+        return {
+            "status": "finished",
+            "file_name": file_name,
+            "file_url": f"https://files.usaspending.gov/generated_downloads/{file_name}",
+            "total_rows": 44,
+            "total_columns": 240,
+            "seconds_elapsed": "2.0",
+        }
+
+    monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    monkeypatch.setattr(client, "status", fake_status)
+
+    result = client._submit_file_c_shard(payload)
+
+    assert len(submitted) == 2
+    assert "columns" not in submitted[0]
+    assert submitted[1]["columns"] == list(bulk_module.FEDERAL_ACCOUNT_FILE_C_COLUMNS)
+    assert result["status"] == "finished"
+    assert result["transport_cache_recovery"] == "complete_file_c_columns"
+    assert result["stale_cached_jobs"][0]["status"] == "status_unavailable"
+    assert result["stale_cached_jobs"][0]["status_error"] == "RemoteProtocolError"
+
+
 def test_file_c_fresh_completed_job_does_not_cache_bust(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
