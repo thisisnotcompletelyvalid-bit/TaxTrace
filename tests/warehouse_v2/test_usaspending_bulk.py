@@ -17,6 +17,19 @@ from taxtrace.warehouse_v2.usaspending_bulk import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _exercise_legacy_generation_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep these transport-unit tests focused on live generation/fallback behavior.
+
+    The pinned-manifest contract has dedicated tests in test_usaspending_file_c_manifest.py.
+    """
+    monkeypatch.setattr(
+        bulk_module,
+        "verified_file_c_components",
+        lambda _payload, *, reporting_agencies: None,
+    )
+
+
 def _job() -> USASpendingDownloadJob:
     return USASpendingDownloadJob(
         kind="accounts",
