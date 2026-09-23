@@ -57,6 +57,18 @@ VERIFIED_FILE_C_ARCHIVE_FALLBACKS: dict[tuple[int, int, int], dict[str, object]]
         "verified_source_grain": "federal_account_award",
         "verified_at": "2026-09-21",
     },
+    (2025, 12, 25): {
+        "file_name": "FY2025P01-P12_025_FA_AccountBreakdownByAward_2026-09-21_H10M16S48549735.zip",
+        "file_url": (
+            "https://files.usaspending.gov/generated_downloads/"
+            "FY2025P01-P12_025_FA_AccountBreakdownByAward_2026-09-21_H10M16S48549735.zip"
+        ),
+        "status": "finished",
+        "total_rows": 949,
+        "total_columns": 240,
+        "verified_source_grain": "federal_account_award",
+        "verified_at": "2026-09-21",
+    },
 }
 
 # USAspending can report `ready` before the generated object is retrievable from
