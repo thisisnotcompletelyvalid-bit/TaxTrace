@@ -498,8 +498,29 @@ class USASpendingBulkClient:
             # Real USAspending submission responses include status_url. Unit-test doubles and
             # direct URLs without asynchronous status continue through the normal wait path.
             if shard.response.get("status_url") and shard.file_name:
-                current = self.status(shard.file_name)
-                if self._is_stale_file_c_cached_job(current):
+                try:
+                    current = self.status(shard.file_name)
+                except httpx.HTTPError as exc:
+                    if candidate_index == 0:
+                        # If even the canonical job's status cannot be read after the bounded
+                        # status retry budget, move to an equivalent complete-column request.
+                        # This avoids treating an opaque cached job as authoritative while still
+                        # requiring the replacement job itself to reach terminal success.
+                        stale_cached_jobs.append(
+                            {
+                                "file_name": shard.file_name,
+                                "file_url": shard.direct_url,
+                                "status": "status_unavailable",
+                                "seconds_elapsed": None,
+                                "status_error": type(exc).__name__,
+                                "download_request": shard.response.get("download_request")
+                                or shard.request,
+                            }
+                        )
+                        continue
+                    current = None
+
+                if current is not None and self._is_stale_file_c_cached_job(current):
                     stale_cached_jobs.append(
                         {
                             "file_name": current.get("file_name") or shard.file_name,
@@ -511,9 +532,12 @@ class USASpendingBulkClient:
                         }
                     )
                     continue
-                state = str(current.get("status") or current.get("state") or "").lower()
+
+                state = str(
+                    (current or {}).get("status") or (current or {}).get("state") or ""
+                ).lower()
                 if state in TERMINAL_SUCCESS_STATES:
-                    completed = {**shard.response, **current}
+                    completed = {**shard.response, **(current or {})}
                 elif state in TERMINAL_FAILURE_STATES:
                     raise RuntimeError(f"USAspending download failed: {current}")
                 else:
