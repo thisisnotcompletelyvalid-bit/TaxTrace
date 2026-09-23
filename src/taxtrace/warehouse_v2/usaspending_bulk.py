@@ -28,6 +28,96 @@ ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
 SHARD_SUBMISSION_PACE_SECONDS = 2.0
 SHARD_INITIAL_SETTLE_SECONDS = 2.0
 TRANSIENT_HTTP_ATTEMPTS = 5
+FILE_C_STALE_CACHE_SECONDS = 1800.0
+FILE_C_CACHE_BUST_VARIANTS = 4
+
+# USAspending caches identical requests and reuses any recent job that is not marked failed,
+# including jobs stranded in a non-terminal state. Explicitly listing the complete official
+# Federal Account File C column set changes only the upstream cache key/output column order;
+# it does not change fiscal scope, source grain, rows, or available fields. The list mirrors
+# USAspending's current award_financial/federal_account query_paths schema (80 columns/member).
+FEDERAL_ACCOUNT_FILE_C_COLUMNS: tuple[str, ...] = (
+    "owning_agency_name",
+    "reporting_agency_name",
+    "submission_period",
+    "federal_account_symbol",
+    "federal_account_name",
+    "program_activity_reporting_key",
+    "agency_identifier_name",
+    "budget_function",
+    "budget_subfunction",
+    "program_activity_code",
+    "program_activity_name",
+    "object_class_code",
+    "object_class_name",
+    "direct_or_reimbursable_funding_source",
+    "disaster_emergency_fund_code",
+    "disaster_emergency_fund_name",
+    "transaction_obligated_amount",
+    "gross_outlay_amount_FYB_to_period_end",
+    "USSGL487200_downward_adj_prior_year_prepaid_undeliv_order_oblig",
+    "USSGL497200_downward_adj_of_prior_year_paid_deliv_orders_oblig",
+    "award_unique_key",
+    "award_id_piid",
+    "parent_award_id_piid",
+    "award_id_fain",
+    "award_id_uri",
+    "award_base_action_date",
+    "award_base_action_date_fiscal_year",
+    "award_latest_action_date",
+    "award_latest_action_date_fiscal_year",
+    "period_of_performance_start_date",
+    "period_of_performance_current_end_date",
+    "ordering_period_end_date",
+    "award_type_code",
+    "award_type",
+    "idv_type_code",
+    "idv_type",
+    "prime_award_base_transaction_description",
+    "awarding_agency_code",
+    "awarding_agency_name",
+    "awarding_subagency_code",
+    "awarding_subagency_name",
+    "awarding_office_code",
+    "awarding_office_name",
+    "funding_agency_code",
+    "funding_agency_name",
+    "funding_sub_agency_code",
+    "funding_sub_agency_name",
+    "funding_office_code",
+    "funding_office_name",
+    "recipient_uei",
+    "recipient_duns",
+    "recipient_name",
+    "recipient_name_raw",
+    "recipient_parent_uei",
+    "recipient_parent_duns",
+    "recipient_parent_name",
+    "recipient_parent_name_raw",
+    "recipient_country",
+    "recipient_state",
+    "recipient_county",
+    "recipient_city",
+    "prime_award_summary_recipient_cd_original",
+    "prime_award_summary_recipient_cd_current",
+    "recipient_zip_code",
+    "primary_place_of_performance_country",
+    "primary_place_of_performance_state",
+    "primary_place_of_performance_county",
+    "prime_award_summary_place_of_performance_cd_original",
+    "prime_award_summary_place_of_performance_cd_current",
+    "primary_place_of_performance_zip_code",
+    "cfda_number",
+    "cfda_title",
+    "product_or_service_code",
+    "product_or_service_code_description",
+    "naics_code",
+    "naics_description",
+    "national_interest_action_code",
+    "national_interest_action",
+    "usaspending_permalink",
+    "last_modified_date_NAMING_CONFLICT_SUFFIX",
+)
 
 # Exact official generated archives that were independently validated by the live-source
 # diagnostic and may be used only when USAspending can no longer regenerate that same
@@ -358,6 +448,93 @@ class USASpendingBulkClient:
             return int(quarter) * 3
         raise ValueError("File C agency sharding requires a fiscal period or quarter")
 
+    @staticmethod
+    def _elapsed_seconds(response: dict) -> float | None:
+        raw = response.get("seconds_elapsed")
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _is_stale_file_c_cached_job(cls, response: dict) -> bool:
+        state = str(response.get("status") or response.get("state") or "").lower()
+        if state in TERMINAL_SUCCESS_STATES or state in TERMINAL_FAILURE_STATES:
+            return False
+        elapsed = cls._elapsed_seconds(response)
+        return elapsed is not None and elapsed >= FILE_C_STALE_CACHE_SECONDS
+
+    @staticmethod
+    def _file_c_cache_bust_payload(payload: dict, variant: int) -> dict:
+        if variant < 0 or variant >= FILE_C_CACHE_BUST_VARIANTS:
+            raise ValueError("File C cache-bust variant is out of range")
+        cache_bust = json.loads(json.dumps(payload))
+        columns = list(FEDERAL_ACCOUNT_FILE_C_COLUMNS)
+        if variant:
+            columns = columns[variant:] + columns[:variant]
+        cache_bust["columns"] = columns
+        return cache_bust
+
+    def _submit_file_c_shard(self, shard_payload: dict) -> dict:
+        """Submit one File C agency shard, bypassing only stale equivalent cached jobs.
+
+        USAspending caches normalized requests and excludes only jobs marked failed. A cached
+        request can therefore remain stuck in running for hours and be returned to every
+        identical caller. When that is observed, retry with the exact same complete 80-column
+        Federal Account File C schema explicitly listed. Column-order variants are bounded and
+        preserve the identical field set, fiscal scope, rows, and source grain.
+        """
+        stale_cached_jobs: list[dict] = []
+        candidates = [shard_payload] + [
+            self._file_c_cache_bust_payload(shard_payload, variant)
+            for variant in range(FILE_C_CACHE_BUST_VARIANTS)
+        ]
+
+        for candidate_index, candidate in enumerate(candidates):
+            shard = self._submit_one("accounts", candidate)
+
+            # Real USAspending submission responses include status_url. Unit-test doubles and
+            # direct URLs without asynchronous status continue through the normal wait path.
+            if shard.response.get("status_url") and shard.file_name:
+                current = self.status(shard.file_name)
+                if self._is_stale_file_c_cached_job(current):
+                    stale_cached_jobs.append(
+                        {
+                            "file_name": current.get("file_name") or shard.file_name,
+                            "file_url": current.get("file_url") or shard.direct_url,
+                            "status": current.get("status") or current.get("state"),
+                            "seconds_elapsed": current.get("seconds_elapsed"),
+                            "download_request": shard.response.get("download_request")
+                            or shard.request,
+                        }
+                    )
+                    continue
+                state = str(current.get("status") or current.get("state") or "").lower()
+                if state in TERMINAL_SUCCESS_STATES:
+                    completed = {**shard.response, **current}
+                elif state in TERMINAL_FAILURE_STATES:
+                    raise RuntimeError(f"USAspending download failed: {current}")
+                else:
+                    completed = self.wait(shard)
+            else:
+                completed = self.wait(shard)
+
+            if stale_cached_jobs:
+                completed = {
+                    **completed,
+                    "transport_cache_recovery": "complete_file_c_columns",
+                    "cache_recovery_variant": max(0, candidate_index - 1),
+                    "stale_cached_jobs": stale_cached_jobs,
+                }
+            return completed
+
+        raise TimeoutError(
+            "USAspending returned only stale cached File C jobs for the canonical request "
+            f"and {FILE_C_CACHE_BUST_VARIANTS} complete-column cache-bust variants"
+        )
+
     def _submit_file_c_agency_shards(self, payload: dict) -> USASpendingDownloadJob:
         """Generate complete File C coverage with only one agency job outstanding at a time.
 
@@ -379,8 +556,7 @@ class USASpendingBulkClient:
             if index > 0:
                 time.sleep(SHARD_SUBMISSION_PACE_SECONDS)
             try:
-                shard = self._submit_one("accounts", shard_payload)
-                completed = self.wait(shard)
+                completed = self._submit_file_c_shard(shard_payload)
             except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
                 toptier_agency_id = int(agency["toptier_agency_id"])
                 fallback = VERIFIED_FILE_C_ARCHIVE_FALLBACKS.get(
