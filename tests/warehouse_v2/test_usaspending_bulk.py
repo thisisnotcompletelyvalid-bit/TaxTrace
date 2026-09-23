@@ -395,9 +395,15 @@ def test_verified_file_c_fallback_manifest_is_narrow() -> None:
     assert set(bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS) == {
         (2025, 12, 22),
         (2025, 12, 24),
+        (2025, 12, 25),
     }
     assert bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS[(2025, 12, 22)]["total_rows"] == 104154
     assert bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS[(2025, 12, 24)]["total_rows"] == 5602
+    ncua = bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS[(2025, 12, 25)]
+    assert ncua["total_rows"] == 949
+    assert ncua["total_columns"] == 240
+    assert ncua["verified_source_grain"] == "federal_account_award"
+    assert ncua["verified_at"] == "2026-09-21"
 
 
 def test_file_c_uses_only_exact_verified_treasury_fallback(
