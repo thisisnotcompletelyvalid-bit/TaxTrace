@@ -12,6 +12,7 @@ import httpx
 
 from taxtrace.config import get_settings
 from taxtrace.warehouse_v2.download import stream_download
+from taxtrace.warehouse_v2.usaspending_file_c_manifest import verified_file_c_components
 
 API_ROOT = "https://api.usaspending.gov/api/v2"
 DOWNLOAD_ENDPOINTS = {
@@ -359,18 +360,44 @@ class USASpendingBulkClient:
         raise ValueError("File C agency sharding requires a fiscal period or quarter")
 
     def _submit_file_c_agency_shards(self, payload: dict) -> USASpendingDownloadJob:
-        """Generate complete File C coverage with only one agency job outstanding at a time.
+        """Resolve complete File C coverage without changing its logical source grain.
 
-        USAspending's account generator has repeatedly dropped Treasury File C submissions
-        when TaxTrace first queued a fleet of agency jobs. The identical Treasury Federal
-        Account request succeeds when generated in isolation. Keep the source partition
-        unchanged, but serialize each current-period agency through submit -> terminal
-        success before creating the next job. Every agency must still succeed.
+        A versioned verified manifest is preferred when present. Its official generated
+        archives are accepted only if the manifest exactly matches the live reporting-agency
+        universe for the requested fiscal period. That makes clean deployment activation a
+        deterministic download/materialization step instead of regenerating more than one
+        hundred asynchronous upstream jobs.
+
+        For fiscal periods without a pinned manifest, retain the conservative legacy path:
+        serialize each current-period agency through submit -> terminal success. Every agency
+        must still succeed, and a partial manifest never degrades into partial coverage.
         """
         filters = payload.get("filters") or {}
         fiscal_year = int(filters["fy"])
         fiscal_period = self._fiscal_period(filters)
         agencies = self.current_reporting_account_agencies(fiscal_year, fiscal_period)
+
+        verified_components = verified_file_c_components(
+            payload,
+            reporting_agencies=agencies,
+        )
+        if verified_components is not None:
+            synthetic_name = (
+                f"FY{fiscal_year}P{fiscal_period}_TaxTrace_VerifiedManifest_FileC.zip"
+            )
+            return USASpendingDownloadJob(
+                kind="accounts",
+                request=payload,
+                response={
+                    "status": "finished",
+                    "file_name": synthetic_name,
+                    "file_url": f"taxtrace-split://{synthetic_name}",
+                    "split_strategy": "file_c_pinned_verified_release_manifest",
+                    "agency_count": len(agencies),
+                    "split_responses": verified_components,
+                },
+            )
+
         completed_responses: list[dict] = []
 
         for index, agency in enumerate(agencies):
