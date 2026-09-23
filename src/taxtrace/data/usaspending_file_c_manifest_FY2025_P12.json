@@ -1,0 +1,52 @@
+{
+  "schema_version": "1.0",
+  "fiscal_year": 2025,
+  "fiscal_period": 12,
+  "account_level": "federal_account",
+  "source_grain": "federal_account_award",
+  "submission_type": "award_financial",
+  "agency_count": 103,
+  "coverage_authority": "USAspending /api/v2/reporting/agencies/overview/ joined to /api/v2/bulk_download/list_agencies/",
+  "note": "Incomplete seed while the one-time verified transport manifest is being built. Product activation must fail closed until agencies exactly match the current reporting universe.",
+  "agencies": [
+    {
+      "toptier_code": "020",
+      "abbreviation": "TREAS",
+      "toptier_agency_id": 22,
+      "name": "Department of the Treasury",
+      "file_name": "FY2025P01-P12_020_FA_AccountBreakdownByAward_2026-09-15_H04M37S59379389.zip",
+      "file_url": "https://files.usaspending.gov/generated_downloads/FY2025P01-P12_020_FA_AccountBreakdownByAward_2026-09-15_H04M37S59379389.zip",
+      "status": "finished",
+      "total_rows": 104154,
+      "total_columns": 240,
+      "verified_source_grain": "federal_account_award",
+      "verified_at": "2026-09-15"
+    },
+    {
+      "toptier_code": "024",
+      "abbreviation": "OPM",
+      "toptier_agency_id": 24,
+      "name": "Office of Personnel Management",
+      "file_name": "FY2025P01-P12_024_FA_AccountBreakdownByAward_2026-09-21_H10M08S16476786.zip",
+      "file_url": "https://files.usaspending.gov/generated_downloads/FY2025P01-P12_024_FA_AccountBreakdownByAward_2026-09-21_H10M08S16476786.zip",
+      "status": "finished",
+      "total_rows": 5602,
+      "total_columns": 240,
+      "verified_source_grain": "federal_account_award",
+      "verified_at": "2026-09-21"
+    },
+    {
+      "toptier_code": "025",
+      "abbreviation": "NCUA",
+      "toptier_agency_id": 25,
+      "name": "National Credit Union Administration",
+      "file_name": "FY2025P01-P12_025_FA_AccountBreakdownByAward_2026-09-21_H10M16S48549735.zip",
+      "file_url": "https://files.usaspending.gov/generated_downloads/FY2025P01-P12_025_FA_AccountBreakdownByAward_2026-09-21_H10M16S48549735.zip",
+      "status": "finished",
+      "total_rows": 949,
+      "total_columns": 240,
+      "verified_source_grain": "federal_account_award",
+      "verified_at": "2026-09-21"
+    }
+  ]
+}
