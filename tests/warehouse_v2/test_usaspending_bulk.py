@@ -391,6 +391,152 @@ def test_status_does_not_retry_nontransient_client_error(
     assert calls == 1
 
 
+def test_file_c_cache_bust_schema_is_complete_and_stable() -> None:
+    columns = bulk_module.FEDERAL_ACCOUNT_FILE_C_COLUMNS
+    assert len(columns) == 80
+    assert len(set(columns)) == 80
+    assert "federal_account_symbol" in columns
+    assert "award_unique_key" in columns
+    assert "gross_outlay_amount_FYB_to_period_end" in columns
+    assert "recipient_uei" in columns
+    assert columns[-1] == "last_modified_date_NAMING_CONFLICT_SUFFIX"
+
+    payload = {
+        "account_level": "federal_account",
+        "file_format": "csv",
+        "filters": {
+            "agency": "14",
+            "fy": "2025",
+            "period": "12",
+            "submission_types": ["award_financial"],
+        },
+    }
+    first = USASpendingBulkClient._file_c_cache_bust_payload(payload, 0)
+    second = USASpendingBulkClient._file_c_cache_bust_payload(payload, 1)
+
+    assert "columns" not in payload
+    assert set(first["columns"]) == set(columns)
+    assert set(second["columns"]) == set(columns)
+    assert first["columns"] != second["columns"]
+    assert first["filters"] == payload["filters"]
+    assert second["filters"] == payload["filters"]
+
+
+def test_file_c_stale_cached_job_is_resubmitted_with_complete_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    payload = {
+        "account_level": "federal_account",
+        "file_format": "csv",
+        "filters": {
+            "agency": "14",
+            "fy": "2025",
+            "period": "12",
+            "submission_types": ["award_financial"],
+        },
+    }
+    submitted: list[dict] = []
+
+    def fake_submit_one(kind: str, candidate: dict) -> USASpendingDownloadJob:
+        submitted.append(candidate)
+        file_name = "stale.zip" if len(submitted) == 1 else "fresh.zip"
+        return USASpendingDownloadJob(
+            kind=kind,
+            request=candidate,
+            response={
+                "status_url": f"https://api.usaspending.gov/status?file_name={file_name}",
+                "file_name": file_name,
+                "file_url": f"https://files.usaspending.gov/generated_downloads/{file_name}",
+                "download_request": candidate,
+            },
+        )
+
+    def fake_status(file_name: str) -> dict:
+        if file_name == "stale.zip":
+            return {
+                "status": "running",
+                "file_name": file_name,
+                "file_url": f"https://files.usaspending.gov/generated_downloads/{file_name}",
+                "seconds_elapsed": "35856.956909",
+            }
+        return {
+            "status": "finished",
+            "file_name": file_name,
+            "file_url": f"https://files.usaspending.gov/generated_downloads/{file_name}",
+            "total_rows": 321,
+            "total_columns": 240,
+            "seconds_elapsed": "1.25",
+        }
+
+    monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    monkeypatch.setattr(client, "status", fake_status)
+
+    result = client._submit_file_c_shard(payload)
+
+    assert len(submitted) == 2
+    assert "columns" not in submitted[0]
+    assert submitted[1]["columns"] == list(bulk_module.FEDERAL_ACCOUNT_FILE_C_COLUMNS)
+    assert result["status"] == "finished"
+    assert result["total_rows"] == 321
+    assert result["total_columns"] == 240
+    assert result["transport_cache_recovery"] == "complete_file_c_columns"
+    assert result["cache_recovery_variant"] == 0
+    assert result["stale_cached_jobs"][0]["file_name"] == "stale.zip"
+    assert result["stale_cached_jobs"][0]["seconds_elapsed"] == "35856.956909"
+    assert result["download_request"]["filters"] == payload["filters"]
+
+
+def test_file_c_fresh_completed_job_does_not_cache_bust(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = USASpendingBulkClient(timeout=1)
+    payload = {
+        "account_level": "federal_account",
+        "file_format": "csv",
+        "filters": {
+            "agency": "14",
+            "fy": "2025",
+            "period": "12",
+            "submission_types": ["award_financial"],
+        },
+    }
+    submitted: list[dict] = []
+
+    def fake_submit_one(kind: str, candidate: dict) -> USASpendingDownloadJob:
+        submitted.append(candidate)
+        return USASpendingDownloadJob(
+            kind=kind,
+            request=candidate,
+            response={
+                "status_url": "https://api.usaspending.gov/status?file_name=fresh.zip",
+                "file_name": "fresh.zip",
+                "file_url": "https://files.usaspending.gov/generated_downloads/fresh.zip",
+                "download_request": candidate,
+            },
+        )
+
+    monkeypatch.setattr(client, "_submit_one", fake_submit_one)
+    monkeypatch.setattr(
+        client,
+        "status",
+        lambda _file_name: {
+            "status": "finished",
+            "file_name": "fresh.zip",
+            "file_url": "https://files.usaspending.gov/generated_downloads/fresh.zip",
+            "total_rows": 12,
+            "total_columns": 240,
+            "seconds_elapsed": "5.0",
+        },
+    )
+
+    result = client._submit_file_c_shard(payload)
+
+    assert submitted == [payload]
+    assert result["status"] == "finished"
+    assert "transport_cache_recovery" not in result
+
+
 def test_verified_file_c_fallback_manifest_is_narrow() -> None:
     assert set(bulk_module.VERIFIED_FILE_C_ARCHIVE_FALLBACKS) == {
         (2025, 12, 22),
