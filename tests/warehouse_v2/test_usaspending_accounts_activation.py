@@ -10,6 +10,7 @@ from taxtrace.warehouse_v2.usaspending_accounts import (
     federal_account_download_requests,
 )
 from taxtrace.warehouse_v2.usaspending_bulk import USASpendingDownloadJob
+from taxtrace.warehouse_v2.usaspending_file_c_release import FILE_C_PRODUCT_COLUMNS
 
 
 def test_federal_account_download_requests_use_distinct_truthful_grains() -> None:
@@ -22,6 +23,7 @@ def test_federal_account_download_requests_use_distinct_truthful_grains() -> Non
         "object_class_program_activity",
     ]
     assert requests["C"]["account_level"] == "federal_account"
+    assert requests["C"]["columns"] == list(FILE_C_PRODUCT_COLUMNS)
     assert requests["C"]["filters"]["submission_types"] == ["award_financial"]
     for payload in requests.values():
         assert payload["filters"]["agency"] == "all"

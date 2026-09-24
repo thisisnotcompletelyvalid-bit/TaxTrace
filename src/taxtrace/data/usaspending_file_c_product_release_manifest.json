@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "releases": [
+    {
+      "fiscal_year": 2025,
+      "fiscal_period": 12,
+      "account_level": "federal_account",
+      "source_grain": "federal_account_award",
+      "submission_type": "award_financial",
+      "file_format": "csv",
+      "columns": [
+        "federal_account_symbol",
+        "gross_outlay_amount_FYB_to_period_end",
+        "award_unique_key",
+        "award_id_piid",
+        "award_id_fain",
+        "award_id_uri",
+        "recipient_name",
+        "recipient_name_raw",
+        "recipient_uei",
+        "prime_award_base_transaction_description",
+        "awarding_agency_name",
+        "funding_agency_name",
+        "award_type",
+        "usaspending_permalink"
+      ],
+      "file_name": "FY2025P01-P12_All_FA_AccountBreakdownByAward_2026-09-23_H17M40S09861275.zip",
+      "file_url": "https://files.usaspending.gov/generated_downloads/FY2025P01-P12_All_FA_AccountBreakdownByAward_2026-09-23_H17M40S09861275.zip",
+      "status": "finished",
+      "total_rows": 39777645,
+      "total_columns": 42,
+      "member_count": 42,
+      "columns_per_member": 14,
+      "coverage_agency_count": 103,
+      "reported_total_size": 4422118.812,
+      "generator_seconds": 1354.143715,
+      "verified_at": "2026-09-23",
+      "verification_run_id": 35897125858,
+      "verification_note": "USAspending reached terminal finished state; the official archive was downloaded and all 42 CSV members were inspected as File C with the exact 14-column product projection. The diagnostic workflow itself failed only because it expected three physical members instead of chunked members."
+    }
+  ]
+}

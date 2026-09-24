@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from taxtrace.config import get_settings
 from taxtrace.warehouse_v2.catalog import seed_catalog
 from taxtrace.warehouse_v2.usaspending_bulk import USASpendingBulkClient, USASpendingDownloadJob
+from taxtrace.warehouse_v2.usaspending_file_c_release import FILE_C_PRODUCT_COLUMNS
 from taxtrace.warehouse_v2.usaspending_lake import materialize_account_archive
 
 ACCOUNT_ACTIVATION_HTTP_TIMEOUT_SECONDS = 90.0
@@ -44,6 +45,7 @@ def federal_account_download_requests(
         "C": {
             "account_level": "federal_account",
             "file_format": "csv",
+            "columns": list(FILE_C_PRODUCT_COLUMNS),
             "filters": {
                 **common_filters,
                 "submission_types": ["award_financial"],
@@ -73,6 +75,8 @@ def _destination_for_job(
 
 def _transport_manifest(response: dict) -> dict[str, object]:
     components = response.get("split_responses") or []
+    if not components:
+        components = [response]
     manifest_components: list[dict[str, object]] = []
     for component in components:
         manifest_components.append(
@@ -84,17 +88,26 @@ def _transport_manifest(response: dict) -> dict[str, object]:
                     "status",
                     "total_rows",
                     "total_columns",
+                    "total_size",
+                    "member_count",
+                    "columns_per_member",
+                    "coverage_agency_count",
                     "agency",
+                    "transport_source",
+                    "transport_strategy",
                     "transport_fallback",
                     "verified_source_grain",
                     "verified_at",
+                    "verification_run_id",
                 )
                 if component.get(key) is not None
             }
         )
     return {
         "split_strategy": response.get("split_strategy"),
+        "transport_strategy": response.get("transport_strategy"),
         "agency_count": response.get("agency_count"),
+        "coverage_agency_count": response.get("coverage_agency_count"),
         "components": manifest_components,
     }
 

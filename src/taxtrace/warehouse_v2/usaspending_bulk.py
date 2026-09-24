@@ -12,6 +12,7 @@ import httpx
 
 from taxtrace.config import get_settings
 from taxtrace.warehouse_v2.download import stream_download
+from taxtrace.warehouse_v2.usaspending_file_c_release import verified_product_file_c_release
 
 API_ROOT = "https://api.usaspending.gov/api/v2"
 DOWNLOAD_ENDPOINTS = {
@@ -624,14 +625,25 @@ class USASpendingBulkClient:
         submission_types = filters.get("submission_types") or []
         agency = str(filters.get("agency") or "all").lower()
 
-        # The full-year all-agency File C generator is independently unreliable upstream.
-        # The reporting overview establishes exact-period coverage; the account-agency reference
-        # supplies the numeric toptier_agency_id selector for each current reporting agency.
+        # Completed-year product File C may use one exact, independently verified
+        # official all-agency archive with only the columns TaxTrace actually consumes.
+        # This preserves the Federal Account × award source grain while avoiding more than
+        # one hundred fragile asynchronous agency-generation jobs on every clean deployment.
         if (
             kind == "accounts"
             and submission_types == ["award_financial"]
             and agency == "all"
         ):
+            verified_release = verified_product_file_c_release(payload)
+            if verified_release is not None:
+                return USASpendingDownloadJob(
+                    kind=kind,
+                    request=payload,
+                    response=verified_release,
+                )
+
+            # Fiscal periods without a pinned verified product release retain the conservative
+            # fail-closed agency-sharded generation path.
             return self._submit_file_c_agency_shards(payload)
 
         if kind == "accounts" and len(submission_types) > 1:
@@ -702,6 +714,14 @@ class USASpendingBulkClient:
         poll_seconds: float = 5,
         max_polls: int = 240,
     ) -> dict:
+        initial_state = str(job.response.get("status") or job.response.get("state") or "").lower()
+        if (
+            initial_state in TERMINAL_SUCCESS_STATES
+            and job.response.get("transport_source")
+            == "pinned_verified_official_generated_archive"
+        ):
+            return job.response
+
         split_responses = job.response.get("split_responses") or []
         if split_responses:
             state = str(job.response.get("status") or "").lower()
