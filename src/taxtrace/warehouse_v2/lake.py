@@ -128,10 +128,11 @@ class LakeStore:
         try:
             strict_sql = "true" if strict_mode else "false"
             null_padding_sql = "true" if null_padding else "false"
+            parallel_sql = "false" if null_padding else "true"
             connection.execute(
                 "COPY (SELECT * FROM read_csv_auto("
                 f"{source_sql}, header=true, delim={delimiter_sql}, all_varchar=true, sample_size=-1, "
-                f"strict_mode={strict_sql}, null_padding={null_padding_sql}"
+                f"strict_mode={strict_sql}, null_padding={null_padding_sql}, parallel={parallel_sql}"
                 f")) TO {destination_sql} (FORMAT PARQUET, COMPRESSION ZSTD)"
             )
             return int(
