@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
@@ -61,8 +62,8 @@ class DatasetRelease(Base):
     row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     government_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     classification_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    raw_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    normalized_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    raw_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    normalized_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     ingested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -202,7 +203,7 @@ class BulkObject(Base):
     partition_json: Mapped[dict] = mapped_column(JSON, default=dict)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     row_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    byte_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    byte_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
     __table_args__ = (

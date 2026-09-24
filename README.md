@@ -4,7 +4,7 @@ TaxTrace is an auditable **“where do my taxes go?”** application. It calcula
 
 The core rules are simple: **CALCULATED is not MODELED, DIRECT is not ALLOCATED, and overlapping accounting views are not additive.** Dedicated revenues stay restricted to their financing purpose. Fungible revenues are proportionally attributed across eligible actual spending. Additive personalized receipts reconcile exactly after cent rounding.
 
-**Application version: 0.7.0. Methodology version: 1.4.0. Census taxonomy revision: 1.2.0.**
+**Application version: 0.7.1. Methodology version: 1.4.0. Census taxonomy revision: 1.2.0.**
 
 ## What is implemented
 
@@ -22,6 +22,7 @@ The core rules are simple: **CALCULATED is not MODELED, DIRECT is not ALLOCATED,
 - **Federal Product V2:** OMB-controlled personalized federal accounts, File B program/object partitioning, conservative File C award projection, D1/D2 prime-recipient enrichment, and non-additive File F subaward drilldown.
 - **Federal Search V2:** direct full-year D1/D2/File F Parquet search for prime awards, recipients, subawards, and subrecipients, with optional receipt-aware annotation from the existing File C personalized projection.
 - **Census Additive Taxonomy:** official post-2022 state/local Direct General Expenditure parent, machine-audited presentation partition, exact unit-level conservation, and current-vintage national aggregate reconciliation.
+- **Real Data Activation:** deployment readiness diagnostics, idempotent national-data initialization, a real government explorer, current machine-readable Treasury controls, and resilient full-year USAspending A/B/C transport.
 
 ## Accounting model
 
@@ -103,13 +104,15 @@ Receipt-aware search may annotate a prime award or recipient only with personali
 
 ## National warehouse status
 
-The complete real-source 2022 Census validation loaded:
+The complete real-source 2022 Census activation validation loaded:
 
 - **92,114** government-unit source records;
 - **88,819** governments with finance facts;
 - **1,337,594** normalized finance facts;
 - **211** finance classifications/item codes;
-- **1,337,594** matching compressed Parquet rows.
+- a normalized Parquet mirror of the real finance release.
+
+The activation gate also requires a real government's supported 2022 Direct General Expenditure partition to conserve exactly.
 
 A populated official USAspending FY2022 account validation materialized:
 
@@ -126,10 +129,41 @@ A separate federal-wide March 1, 2022 Custom Award Data Download validation mate
 
 The bounded award slice validates schemas, classification, identity keys, and materialization; it is not represented as complete annual product coverage.
 
+## Real data activation
+
+A running API is not evidence that the deployment contains the national warehouse. TaxTrace 0.7.1 exposes the distinction directly:
+
+```text
+GET /v2/data/product-readiness
+```
+
+or from the repository:
+
+```bash
+make data-status
+```
+
+A fresh or fixture-scale database reports `FIXTURE_OR_EMPTY`. National state/local readiness is only asserted after the deployed database reaches the validated Census scale and the required normalized data objects are physically available.
+
+To populate missing product layers idempotently:
+
+```bash
+make activate-product
+```
+
+The initializer can populate the national Census registry/finance baseline, real Treasury and OMB federal controls, and full-year USAspending account detail. Already-ready expensive layers are skipped.
+
+The standard Docker Compose stack includes the same one-shot initializer before the API. Database, raw-data, and warehouse-lake locations must use persistent storage if the populated deployment is expected to survive container recreation.
+
+Full-year USAspending activation uses two explicit product source grains: File A/B remain Treasury Account-level, while File C is requested at Federal Account × award grain because TaxTrace's conservative award projection is controlled at the federal-account level. For FY2025/P12, File C now consumes a pinned, independently verified official USAspending all-agency archive generated with the exact 14 columns the product needs. The verified release contains 39,777,645 rows across 42 CSV members and is materialized as 42 local Parquet objects. Periods without a pinned verified product release retain the fail-closed current-reporting-agency generation path. Each logical release retains its own fiscal-year/period-12 request provenance, and A/B/C remain non-additive.
+
+See `docs/REAL_DATA_ACTIVATION.md` and `docs/DATA_SOURCES.md` for the deployment and source contracts.
+
 ## Web routes
 
 - `/` — Federal Product V2 receipt and explorer.
 - `/search` — Federal Search V2 over Warehouse V2 awards/recipients/subawards.
+- `/governments` — real Census government search, source coverage, and supported additive finance partition.
 - `/florida` — Florida + Alachua + Gainesville phases 7, 8, and 9A.
 - backend `/docs` — FastAPI/OpenAPI documentation.
 - backend `/health` — API health and application version.
@@ -149,6 +183,7 @@ POST /v2/search/federal
 Warehouse V2 data:
 
 ```text
+GET /v2/data/product-readiness
 GET /v2/data/catalog
 GET /v2/data/stats
 GET /v2/data/census-taxonomy?fiscal_year=2022
@@ -193,6 +228,8 @@ npm install
 npm run dev
 ```
 
+The no-Docker development bootstrap may use fixtures. Run `make data-status` before interpreting an empty or small result set as national product coverage.
+
 ## Warehouse CLI
 
 ```bash
@@ -204,9 +241,16 @@ taxtrace data bootstrap-federal-accounts --fiscal-year 2025 --period 12
 taxtrace data bootstrap-federal-awards --fiscal-year 2025
 ```
 
+Product activation shortcuts:
+
+```bash
+make activate-product
+make data-status
+```
+
 ## State/local roadmap
 
-0.7.0 completes the official additive Census expenditure taxonomy. The next product phase is **0.7.5 jurisdiction resolution**: determine the applicable state, county, municipality, school district, and relevant special districts without treating overlapping geographies as additive spending.
+0.7.0 completes the official additive Census expenditure taxonomy. Release 0.7.1 makes the real national data path deployable and visible without changing that taxonomy's accounting semantics. The next product phase is **0.7.5 jurisdiction resolution**: determine the applicable state, county, municipality, school district, and relevant special districts without treating overlapping geographies as additive spending.
 
 After jurisdiction resolution, **0.8.0** can connect supported state/local personal tax liabilities to the Census additive spending parent for a nationwide receipt bridge.
 
@@ -220,16 +264,20 @@ python -m compileall -q src apps alembic
 
 Normal CI runs migrations, a standalone Next.js production build, and no-Docker API/browser E2E.
 
-The dedicated **Census Taxonomy Live Validation** workflow downloads the current revised 2022 official Census sources and requires exact aggregate reconciliation between the bundled public-use national controls and current `GS00LOCALFIN` while preserving the individual-row aggregate-stage adjustment explicitly.
+The dedicated Census taxonomy validation downloads current official controls and requires exact aggregate reconciliation while preserving the individual-government vs aggregate-stage distinction.
 
-Other expensive real-source gates remain manual for full Census import and USAspending archive validation.
+The **Product Data Activation Live Validation** gate starts from a clean PostgreSQL database, imports the real national Census sources, requires the validated national scale, and exercises a real government's additive partition.
+
+The **Federal Product Data Live Validation** gate starts from a clean PostgreSQL database, ingests current real Treasury and OMB sources, materializes full-year USAspending account data, and requires a substantive File B-backed Federal Product V2 receipt with exact conservation. The verified FY2025 gate materialized 8,979 File A rows, 148,206 File B rows, and 39,777,645 File C rows; 1,210 OMB accounts matched File B, and the sample receipt conserved to $0.00.
+
+These real-source gates are separate from fixture tests. A fixture-scale database cannot satisfy the product-readiness release contract.
 
 ## Repository map
 
 ```text
 apps/
   api/                         FastAPI V1/V2 APIs
-  web/                         Next.js federal, search, and Florida surfaces
+  web/                         Next.js federal, search, government, and Florida surfaces
 src/taxtrace/
   tax/                         federal tax engine
   finance/                     federal snapshots and legacy ingestion
@@ -249,6 +297,7 @@ docs/
   FEDERAL_SEARCH_V2.md
   PHASE_7_8_9A.md
   PRODUCT_SCOPE.md
+  REAL_DATA_ACTIVATION.md
   METHODOLOGY.md
 ```
 

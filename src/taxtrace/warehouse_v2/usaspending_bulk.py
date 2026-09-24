@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from zipfile import ZIP_DEFLATED, ZipFile
 
 import httpx
 
 from taxtrace.config import get_settings
 from taxtrace.warehouse_v2.download import stream_download
+from taxtrace.warehouse_v2.usaspending_file_c_release import verified_product_file_c_release
 
 API_ROOT = "https://api.usaspending.gov/api/v2"
 DOWNLOAD_ENDPOINTS = {
@@ -20,6 +24,143 @@ DOWNLOAD_ENDPOINTS = {
     "assistance": f"{API_ROOT}/download/assistance/",
 }
 STATUS_ENDPOINT = f"{API_ROOT}/download/status/"
+REPORTING_AGENCIES_ENDPOINT = f"{API_ROOT}/reporting/agencies/overview/"
+ACCOUNT_AGENCIES_ENDPOINT = f"{API_ROOT}/bulk_download/list_agencies/"
+SHARD_SUBMISSION_PACE_SECONDS = 2.0
+SHARD_INITIAL_SETTLE_SECONDS = 2.0
+TRANSIENT_HTTP_ATTEMPTS = 5
+FILE_C_STALE_CACHE_SECONDS = 1800.0
+FILE_C_CACHE_BUST_VARIANTS = 4
+
+# USAspending caches identical requests and reuses any recent job that is not marked failed,
+# including jobs stranded in a non-terminal state. Explicitly listing the complete official
+# Federal Account File C column set changes only the upstream cache key/output column order;
+# it does not change fiscal scope, source grain, rows, or available fields. The list mirrors
+# USAspending's current award_financial/federal_account query_paths schema (80 columns/member).
+FEDERAL_ACCOUNT_FILE_C_COLUMNS: tuple[str, ...] = (
+    "owning_agency_name",
+    "reporting_agency_name",
+    "submission_period",
+    "federal_account_symbol",
+    "federal_account_name",
+    "program_activity_reporting_key",
+    "agency_identifier_name",
+    "budget_function",
+    "budget_subfunction",
+    "program_activity_code",
+    "program_activity_name",
+    "object_class_code",
+    "object_class_name",
+    "direct_or_reimbursable_funding_source",
+    "disaster_emergency_fund_code",
+    "disaster_emergency_fund_name",
+    "transaction_obligated_amount",
+    "gross_outlay_amount_FYB_to_period_end",
+    "USSGL487200_downward_adj_prior_year_prepaid_undeliv_order_oblig",
+    "USSGL497200_downward_adj_of_prior_year_paid_deliv_orders_oblig",
+    "award_unique_key",
+    "award_id_piid",
+    "parent_award_id_piid",
+    "award_id_fain",
+    "award_id_uri",
+    "award_base_action_date",
+    "award_base_action_date_fiscal_year",
+    "award_latest_action_date",
+    "award_latest_action_date_fiscal_year",
+    "period_of_performance_start_date",
+    "period_of_performance_current_end_date",
+    "ordering_period_end_date",
+    "award_type_code",
+    "award_type",
+    "idv_type_code",
+    "idv_type",
+    "prime_award_base_transaction_description",
+    "awarding_agency_code",
+    "awarding_agency_name",
+    "awarding_subagency_code",
+    "awarding_subagency_name",
+    "awarding_office_code",
+    "awarding_office_name",
+    "funding_agency_code",
+    "funding_agency_name",
+    "funding_sub_agency_code",
+    "funding_sub_agency_name",
+    "funding_office_code",
+    "funding_office_name",
+    "recipient_uei",
+    "recipient_duns",
+    "recipient_name",
+    "recipient_name_raw",
+    "recipient_parent_uei",
+    "recipient_parent_duns",
+    "recipient_parent_name",
+    "recipient_parent_name_raw",
+    "recipient_country",
+    "recipient_state",
+    "recipient_county",
+    "recipient_city",
+    "prime_award_summary_recipient_cd_original",
+    "prime_award_summary_recipient_cd_current",
+    "recipient_zip_code",
+    "primary_place_of_performance_country",
+    "primary_place_of_performance_state",
+    "primary_place_of_performance_county",
+    "prime_award_summary_place_of_performance_cd_original",
+    "prime_award_summary_place_of_performance_cd_current",
+    "primary_place_of_performance_zip_code",
+    "cfda_number",
+    "cfda_title",
+    "product_or_service_code",
+    "product_or_service_code_description",
+    "naics_code",
+    "naics_description",
+    "national_interest_action_code",
+    "national_interest_action",
+    "usaspending_permalink",
+    "last_modified_date_NAMING_CONFLICT_SUFFIX",
+)
+
+# Exact official generated archives that were independently validated by the live-source
+# diagnostic and may be used only when USAspending can no longer regenerate that same
+# immutable fiscal-period/agency/source-grain request. This is not a generic cache.
+VERIFIED_FILE_C_ARCHIVE_FALLBACKS: dict[tuple[int, int, int], dict[str, object]] = {
+    (2025, 12, 22): {
+        "file_name": "FY2025P01-P12_020_FA_AccountBreakdownByAward_2026-09-15_H04M37S59379389.zip",
+        "file_url": (
+            "https://files.usaspending.gov/generated_downloads/"
+            "FY2025P01-P12_020_FA_AccountBreakdownByAward_2026-09-15_H04M37S59379389.zip"
+        ),
+        "status": "finished",
+        "total_rows": 104154,
+        "total_columns": 240,
+        "verified_source_grain": "federal_account_award",
+        "verified_at": "2026-09-15",
+    },
+    (2025, 12, 24): {
+        "file_name": "FY2025P01-P12_024_FA_AccountBreakdownByAward_2026-09-21_H10M08S16476786.zip",
+        "file_url": (
+            "https://files.usaspending.gov/generated_downloads/"
+            "FY2025P01-P12_024_FA_AccountBreakdownByAward_2026-09-21_H10M08S16476786.zip"
+        ),
+        "status": "finished",
+        "total_rows": 5602,
+        "total_columns": 240,
+        "verified_source_grain": "federal_account_award",
+        "verified_at": "2026-09-21",
+    },
+    (2025, 12, 25): {
+        "file_name": "FY2025P01-P12_025_FA_AccountBreakdownByAward_2026-09-21_H10M16S48549735.zip",
+        "file_url": (
+            "https://files.usaspending.gov/generated_downloads/"
+            "FY2025P01-P12_025_FA_AccountBreakdownByAward_2026-09-21_H10M16S48549735.zip"
+        ),
+        "status": "finished",
+        "total_rows": 949,
+        "total_columns": 240,
+        "verified_source_grain": "federal_account_award",
+        "verified_at": "2026-09-21",
+    },
+}
 
 # USAspending can report `ready` before the generated object is retrievable from
 # files.usaspending.gov. A real account-download run observed the transition
@@ -48,6 +189,80 @@ class USASpendingDownloadJob:
         )
 
 
+def _reporting_agencies_from_response(payload: dict) -> list[dict]:
+    """Normalize one reporting-overview page to agencies with a submission in that period."""
+    by_abbreviation: dict[str, dict] = {}
+    for agency in payload.get("results") or []:
+        # The reporting overview intentionally returns broader DABS agencies with null
+        # period-specific fields when they did not submit in the requested period.
+        # `recent_publication_date` is populated only when that period has a submission.
+        if not agency.get("recent_publication_date"):
+            continue
+        abbreviation = str(agency.get("abbreviation") or "").strip().upper()
+        if not abbreviation:
+            raise RuntimeError(
+                "USAspending reporting overview returned a current-period agency "
+                "without an abbreviation"
+            )
+        toptier_code = str(agency.get("toptier_code") or "").strip()
+        if not toptier_code:
+            raise RuntimeError(
+                "USAspending reporting overview returned a current-period agency "
+                "without a toptier code"
+            )
+        by_abbreviation[abbreviation] = {
+            "abbreviation": abbreviation,
+            "toptier_code": toptier_code,
+            "name": agency.get("agency_name"),
+        }
+    return sorted(
+        by_abbreviation.values(),
+        key=lambda agency: (agency["toptier_code"], agency["abbreviation"]),
+    )
+
+
+def _account_agency_ids_from_response(payload: dict) -> dict[str, int]:
+    """Return {toptier_code: toptier_agency_id} from the bulk account-agency reference."""
+    raw_agencies = payload.get("agencies") or []
+    if isinstance(raw_agencies, dict):
+        agencies = [
+            *(raw_agencies.get("cfo_agencies") or []),
+            *(raw_agencies.get("other_agencies") or []),
+        ]
+    elif isinstance(raw_agencies, list):
+        agencies = raw_agencies
+    else:
+        raise RuntimeError("USAspending account-agency reference returned an invalid agencies shape")
+
+    by_code: dict[str, int] = {}
+    for agency in agencies:
+        toptier_code = str(agency.get("toptier_code") or "").strip()
+        raw_id = agency.get("toptier_agency_id")
+        if not toptier_code or raw_id is None:
+            raise RuntimeError(
+                "USAspending account-agency reference returned an agency without "
+                "toptier_code/toptier_agency_id"
+            )
+        try:
+            toptier_agency_id = int(raw_id)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(
+                f"USAspending returned invalid toptier_agency_id {raw_id!r} "
+                f"for toptier code {toptier_code}"
+            ) from exc
+        prior = by_code.get(toptier_code)
+        if prior is not None and prior != toptier_agency_id:
+            raise RuntimeError(
+                f"USAspending returned conflicting toptier agency IDs for {toptier_code}: "
+                f"{prior} and {toptier_agency_id}"
+            )
+        by_code[toptier_code] = toptier_agency_id
+
+    if not by_code:
+        raise RuntimeError("USAspending returned no account agencies")
+    return by_code
+
+
 class USASpendingBulkClient:
     """Durable client around USAspending's official asynchronous download surfaces.
 
@@ -59,6 +274,22 @@ class USASpendingBulkClient:
     USAspending returns the eventual file URL when a job is submitted, before the archive is
     necessarily retrievable. TaxTrace therefore polls the status endpoint whenever a file name
     is present and only downloads after a terminal success state such as `finished`.
+
+    Full-year all-agency account requests are large enough that USAspending can accept the job,
+    spend many minutes generating it, and then fail server-side. A/B/C are separate DATA Act
+    submission grains and TaxTrace already materializes them into separate datasets, so a request
+    containing multiple account submission types is transparently split by submission type.
+
+    Live FY2025 validation further proved that the all-agency File C `award_financial` component
+    fails independently after roughly sixteen minutes of upstream generation. File C is therefore
+    transport-sharded across agencies with actual submissions for the exact fiscal year and period.
+    That reporting universe is strictly joined by `toptier_code` to USAspending's account-agency
+    reference, which supplies the numeric `toptier_agency_id` accepted by the account-download
+    filter. File A/B remain all-agency jobs. Shard submissions are lightly paced and transient
+    HTTP/transport failures are retried a bounded number of times. Every shard must still be
+    accepted and later reach terminal success. Completed official archives are streamed into one
+    local ZIP before the existing account-lake materializer sees them. This changes transport only,
+    not source grain, fiscal-period evidence, additivity, or release provenance.
     """
 
     def __init__(self, timeout: float | None = None):
@@ -66,24 +297,415 @@ class USASpendingBulkClient:
         self.timeout = timeout or settings.http_timeout_seconds
         self.headers = {"User-Agent": settings.user_agent}
 
+    def _submit_one(self, kind: str, payload: dict) -> USASpendingDownloadJob:
+        last_error: Exception | None = None
+        for attempt in range(TRANSIENT_HTTP_ATTEMPTS):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout, follow_redirects=True, headers=self.headers
+                ) as client:
+                    response = client.post(DOWNLOAD_ENDPOINTS[kind], json=payload)
+                    response.raise_for_status()
+                    data = response.json()
+                return USASpendingDownloadJob(kind=kind, request=payload, response=data)
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code
+                retriable = status_code == 429 or status_code >= 500
+                if not retriable or attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
+            except httpx.RequestError as exc:
+                # A generated-download submission can be dropped before any HTTP response is
+                # received (observed as RemoteProtocolError in live validation). Retrying can
+                # leave an unreferenced duplicate upstream job if the original request reached
+                # USAspending, but TaxTrace records/materializes only the successfully returned
+                # job, so this cannot duplicate local source facts.
+                last_error = exc
+                if attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
+        assert last_error is not None
+        raise last_error
+
+    def reporting_agencies(self, fiscal_year: int, fiscal_period: int) -> list[dict]:
+        """Return agencies with an actual submission for the exact fiscal year and period."""
+        agencies: dict[str, dict] = {}
+        page = 1
+        with httpx.Client(
+            timeout=self.timeout, follow_redirects=True, headers=self.headers
+        ) as client:
+            while True:
+                response = client.get(
+                    REPORTING_AGENCIES_ENDPOINT,
+                    params={
+                        "fiscal_year": fiscal_year,
+                        "fiscal_period": fiscal_period,
+                        "page": page,
+                        "limit": 100,
+                        "sort": "toptier_code",
+                        "order": "asc",
+                    },
+                )
+                response.raise_for_status()
+                payload = response.json()
+                for agency in _reporting_agencies_from_response(payload):
+                    agencies[agency["abbreviation"]] = agency
+
+                metadata = payload.get("page_metadata") or {}
+                if not metadata.get("hasNext"):
+                    break
+                next_page = metadata.get("next")
+                if next_page is None:
+                    raise RuntimeError(
+                        "USAspending reporting overview said more pages exist but returned no next page"
+                    )
+                page = int(next_page)
+
+        if not agencies:
+            raise RuntimeError(
+                f"USAspending returned no current-period reporting agencies "
+                f"for FY{fiscal_year} P{fiscal_period}"
+            )
+        return sorted(
+            agencies.values(),
+            key=lambda agency: (agency["toptier_code"], agency["abbreviation"]),
+        )
+
+    def account_agency_ids(self) -> dict[str, int]:
+        """Return the official internal toptier agency IDs accepted by account downloads."""
+        last_error: Exception | None = None
+        for attempt in range(TRANSIENT_HTTP_ATTEMPTS):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout, follow_redirects=True, headers=self.headers
+                ) as client:
+                    response = client.post(
+                        ACCOUNT_AGENCIES_ENDPOINT,
+                        json={"type": "account_agencies"},
+                    )
+                    response.raise_for_status()
+                    return _account_agency_ids_from_response(response.json())
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                status_code = exc.response.status_code
+                retriable = status_code == 429 or status_code >= 500
+                if not retriable or attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
+        assert last_error is not None
+        raise last_error
+
+    def current_reporting_account_agencies(
+        self,
+        fiscal_year: int,
+        fiscal_period: int,
+    ) -> list[dict]:
+        """Join exact-period reporting agencies to valid account-download toptier IDs."""
+        reporting = self.reporting_agencies(fiscal_year, fiscal_period)
+        account_ids = self.account_agency_ids()
+        joined: list[dict] = []
+        missing: list[str] = []
+        for agency in reporting:
+            toptier_code = agency["toptier_code"]
+            toptier_agency_id = account_ids.get(toptier_code)
+            if toptier_agency_id is None:
+                missing.append(f"{toptier_code}:{agency['abbreviation']}")
+                continue
+            joined.append(
+                {
+                    **agency,
+                    "toptier_agency_id": toptier_agency_id,
+                }
+            )
+        if missing:
+            raise RuntimeError(
+                "USAspending current-period reporting agencies are missing from the "
+                "account-agency reference; refusing incomplete File C coverage: "
+                + ", ".join(sorted(missing))
+            )
+        return joined
+
+    @staticmethod
+    def _job_record(job: USASpendingDownloadJob) -> dict:
+        return {
+            "kind": job.kind,
+            "request": job.request,
+            "response": job.response,
+        }
+
+    @staticmethod
+    def _fiscal_period(filters: dict) -> int:
+        period = filters.get("period")
+        if period is not None:
+            return int(period)
+        quarter = filters.get("quarter")
+        if quarter is not None:
+            return int(quarter) * 3
+        raise ValueError("File C agency sharding requires a fiscal period or quarter")
+
+    @staticmethod
+    def _elapsed_seconds(response: dict) -> float | None:
+        raw = response.get("seconds_elapsed")
+        if raw is None:
+            return None
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _is_stale_file_c_cached_job(cls, response: dict) -> bool:
+        state = str(response.get("status") or response.get("state") or "").lower()
+        if state in TERMINAL_SUCCESS_STATES or state in TERMINAL_FAILURE_STATES:
+            return False
+        elapsed = cls._elapsed_seconds(response)
+        return elapsed is not None and elapsed >= FILE_C_STALE_CACHE_SECONDS
+
+    @staticmethod
+    def _file_c_cache_bust_payload(payload: dict, variant: int) -> dict:
+        if variant < 0 or variant >= FILE_C_CACHE_BUST_VARIANTS:
+            raise ValueError("File C cache-bust variant is out of range")
+        cache_bust = json.loads(json.dumps(payload))
+        columns = list(FEDERAL_ACCOUNT_FILE_C_COLUMNS)
+        if variant:
+            columns = columns[variant:] + columns[:variant]
+        cache_bust["columns"] = columns
+        return cache_bust
+
+    def _submit_file_c_shard(self, shard_payload: dict) -> dict:
+        """Submit one File C agency shard, bypassing only stale equivalent cached jobs.
+
+        USAspending caches normalized requests and excludes only jobs marked failed. A cached
+        request can therefore remain stuck in running for hours and be returned to every
+        identical caller. When that is observed, retry with the exact same complete 80-column
+        Federal Account File C schema explicitly listed. Column-order variants are bounded and
+        preserve the identical field set, fiscal scope, rows, and source grain.
+        """
+        stale_cached_jobs: list[dict] = []
+        candidates = [shard_payload] + [
+            self._file_c_cache_bust_payload(shard_payload, variant)
+            for variant in range(FILE_C_CACHE_BUST_VARIANTS)
+        ]
+
+        for candidate_index, candidate in enumerate(candidates):
+            shard = self._submit_one("accounts", candidate)
+
+            # Real USAspending submission responses include status_url. Unit-test doubles and
+            # direct URLs without asynchronous status continue through the normal wait path.
+            if shard.response.get("status_url") and shard.file_name:
+                try:
+                    current = self.status(shard.file_name)
+                except httpx.HTTPError as exc:
+                    if candidate_index == 0:
+                        # If even the canonical job's status cannot be read after the bounded
+                        # status retry budget, move to an equivalent complete-column request.
+                        # This avoids treating an opaque cached job as authoritative while still
+                        # requiring the replacement job itself to reach terminal success.
+                        stale_cached_jobs.append(
+                            {
+                                "file_name": shard.file_name,
+                                "file_url": shard.direct_url,
+                                "status": "status_unavailable",
+                                "seconds_elapsed": None,
+                                "status_error": type(exc).__name__,
+                                "download_request": shard.response.get("download_request")
+                                or shard.request,
+                            }
+                        )
+                        continue
+                    current = None
+
+                if current is not None and self._is_stale_file_c_cached_job(current):
+                    stale_cached_jobs.append(
+                        {
+                            "file_name": current.get("file_name") or shard.file_name,
+                            "file_url": current.get("file_url") or shard.direct_url,
+                            "status": current.get("status") or current.get("state"),
+                            "seconds_elapsed": current.get("seconds_elapsed"),
+                            "download_request": shard.response.get("download_request")
+                            or shard.request,
+                        }
+                    )
+                    continue
+
+                state = str(
+                    (current or {}).get("status") or (current or {}).get("state") or ""
+                ).lower()
+                if state in TERMINAL_SUCCESS_STATES:
+                    completed = {**shard.response, **(current or {})}
+                elif state in TERMINAL_FAILURE_STATES:
+                    raise RuntimeError(f"USAspending download failed: {current}")
+                else:
+                    completed = self.wait(shard)
+            else:
+                completed = self.wait(shard)
+
+            if stale_cached_jobs:
+                completed = {
+                    **completed,
+                    "transport_cache_recovery": "complete_file_c_columns",
+                    "cache_recovery_variant": max(0, candidate_index - 1),
+                    "stale_cached_jobs": stale_cached_jobs,
+                }
+            return completed
+
+        raise TimeoutError(
+            "USAspending returned only stale cached File C jobs for the canonical request "
+            f"and {FILE_C_CACHE_BUST_VARIANTS} complete-column cache-bust variants"
+        )
+
+    def _submit_file_c_agency_shards(self, payload: dict) -> USASpendingDownloadJob:
+        """Generate complete File C coverage with only one agency job outstanding at a time.
+
+        USAspending's account generator has repeatedly dropped Treasury File C submissions
+        when TaxTrace first queued a fleet of agency jobs. The identical Treasury Federal
+        Account request succeeds when generated in isolation. Keep the source partition
+        unchanged, but serialize each current-period agency through submit -> terminal
+        success before creating the next job. Every agency must still succeed.
+        """
+        filters = payload.get("filters") or {}
+        fiscal_year = int(filters["fy"])
+        fiscal_period = self._fiscal_period(filters)
+        agencies = self.current_reporting_account_agencies(fiscal_year, fiscal_period)
+        completed_responses: list[dict] = []
+
+        for index, agency in enumerate(agencies):
+            shard_payload = json.loads(json.dumps(payload))
+            shard_payload["filters"]["agency"] = str(agency["toptier_agency_id"])
+            if index > 0:
+                time.sleep(SHARD_SUBMISSION_PACE_SECONDS)
+            try:
+                completed = self._submit_file_c_shard(shard_payload)
+            except (httpx.HTTPError, RuntimeError, TimeoutError) as exc:
+                toptier_agency_id = int(agency["toptier_agency_id"])
+                fallback = VERIFIED_FILE_C_ARCHIVE_FALLBACKS.get(
+                    (fiscal_year, fiscal_period, toptier_agency_id)
+                )
+                if fallback is None:
+                    label = agency["abbreviation"]
+                    name = agency.get("name") or "unknown agency"
+                    raise RuntimeError(
+                        f"Failed to generate FY{fiscal_year} P{fiscal_period} File C shard "
+                        f"for {label} ({name}, toptier_agency_id={toptier_agency_id}); "
+                        "refusing incomplete federal coverage"
+                    ) from exc
+                completed = {
+                    **fallback,
+                    "transport_fallback": "verified_official_generated_archive",
+                    "agency": str(toptier_agency_id),
+                    "download_request": shard_payload,
+                }
+            completed_responses.append(completed)
+
+        synthetic_name = f"FY{fiscal_year}P{fiscal_period}_TaxTrace_AgencySharded_FileC.zip"
+        return USASpendingDownloadJob(
+            kind="accounts",
+            request=payload,
+            response={
+                "status": "finished",
+                "file_name": synthetic_name,
+                "file_url": f"taxtrace-split://{synthetic_name}",
+                "split_strategy": "file_c_sequential_current_reporting_toptier_agency_id",
+                "agency_count": len(agencies),
+                "split_responses": completed_responses,
+            },
+        )
+
     def submit(self, kind: str, payload: dict) -> USASpendingDownloadJob:
         if kind not in DOWNLOAD_ENDPOINTS:
             raise ValueError(f"kind must be one of {sorted(DOWNLOAD_ENDPOINTS)}")
-        with httpx.Client(
-            timeout=self.timeout, follow_redirects=True, headers=self.headers
-        ) as client:
-            response = client.post(DOWNLOAD_ENDPOINTS[kind], json=payload)
-            response.raise_for_status()
-            data = response.json()
-        return USASpendingDownloadJob(kind=kind, request=payload, response=data)
+
+        filters = payload.get("filters") or {}
+        submission_types = filters.get("submission_types") or []
+        agency = str(filters.get("agency") or "all").lower()
+
+        # Completed-year product File C may use one exact, independently verified
+        # official all-agency archive with only the columns TaxTrace actually consumes.
+        # This preserves the Federal Account × award source grain while avoiding more than
+        # one hundred fragile asynchronous agency-generation jobs on every clean deployment.
+        if (
+            kind == "accounts"
+            and submission_types == ["award_financial"]
+            and agency == "all"
+        ):
+            verified_release = verified_product_file_c_release(payload)
+            if verified_release is not None:
+                return USASpendingDownloadJob(
+                    kind=kind,
+                    request=payload,
+                    response=verified_release,
+                )
+
+            # Fiscal periods without a pinned verified product release retain the conservative
+            # fail-closed agency-sharded generation path.
+            return self._submit_file_c_agency_shards(payload)
+
+        if kind == "accounts" and len(submission_types) > 1:
+            split_jobs: list[dict] = []
+            file_c_agency_count = 0
+            for submission_type in submission_types:
+                component_payload = json.loads(json.dumps(payload))
+                component_payload["filters"]["submission_types"] = [submission_type]
+                component = self.submit(kind, component_payload)
+                nested = component.response.get("split_jobs") or []
+                if nested:
+                    split_jobs.extend(nested)
+                    if submission_type == "award_financial":
+                        file_c_agency_count = int(component.response.get("agency_count") or 0)
+                else:
+                    split_jobs.append(self._job_record(component))
+
+            fiscal_year = filters.get("fy", "unknown")
+            period = filters.get("period") or filters.get("quarter") or "unknown"
+            synthetic_name = f"FY{fiscal_year}P{period}_TaxTrace_Split_AccountData.zip"
+            return USASpendingDownloadJob(
+                kind=kind,
+                request=payload,
+                response={
+                    "status": "submitted",
+                    "file_name": synthetic_name,
+                    "file_url": f"taxtrace-split://{synthetic_name}",
+                    "split_strategy": (
+                        "submission_type_with_file_c_current_reporting_toptier_agency_id_shards"
+                    ),
+                    "file_c_agency_count": file_c_agency_count,
+                    "split_jobs": split_jobs,
+                },
+            )
+
+        return self._submit_one(kind, payload)
 
     def status(self, file_name: str) -> dict:
-        with httpx.Client(
-            timeout=self.timeout, follow_redirects=True, headers=self.headers
-        ) as client:
-            response = client.get(STATUS_ENDPOINT, params={"file_name": file_name})
-            response.raise_for_status()
-            return response.json()
+        """Fetch one USAspending job status with bounded transient transport retries."""
+        last_error: Exception | None = None
+        for attempt in range(TRANSIENT_HTTP_ATTEMPTS):
+            try:
+                with httpx.Client(
+                    timeout=self.timeout, follow_redirects=True, headers=self.headers
+                ) as client:
+                    response = client.get(STATUS_ENDPOINT, params={"file_name": file_name})
+                    response.raise_for_status()
+                    return response.json()
+            except httpx.HTTPStatusError as exc:
+                last_error = exc
+                code = exc.response.status_code
+                retriable = code == 429 or code >= 500
+                if not retriable or attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == TRANSIENT_HTTP_ATTEMPTS - 1:
+                    raise
+                time.sleep(2**attempt)
+        assert last_error is not None
+        raise last_error
 
     def wait(
         self,
@@ -92,6 +714,42 @@ class USASpendingBulkClient:
         poll_seconds: float = 5,
         max_polls: int = 240,
     ) -> dict:
+        initial_state = str(job.response.get("status") or job.response.get("state") or "").lower()
+        if (
+            initial_state in TERMINAL_SUCCESS_STATES
+            and job.response.get("transport_source")
+            == "pinned_verified_official_generated_archive"
+        ):
+            return job.response
+
+        split_responses = job.response.get("split_responses") or []
+        if split_responses:
+            state = str(job.response.get("status") or "").lower()
+            if state in TERMINAL_SUCCESS_STATES:
+                return job.response
+
+        split_jobs = job.response.get("split_jobs") or []
+        if split_jobs:
+            completed: list[dict] = []
+            for item in split_jobs:
+                component = USASpendingDownloadJob(
+                    kind=item["kind"],
+                    request=item["request"],
+                    response=item["response"],
+                )
+                completed.append(
+                    self.wait(
+                        component,
+                        poll_seconds=poll_seconds,
+                        max_polls=max_polls,
+                    )
+                )
+            return {
+                **job.response,
+                "status": "finished",
+                "split_responses": completed,
+            }
+
         if not job.file_name:
             if job.direct_url:
                 return {**job.response, "status": job.response.get("status", "complete")}
@@ -110,7 +768,49 @@ class USASpendingBulkClient:
             f"USAspending download did not complete after {max_polls} polls: {latest}"
         )
 
+    def _combine_split_archives(self, responses: list[dict], destination: Path) -> Path:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with TemporaryDirectory(prefix="taxtrace-usaspending-", dir=destination.parent) as temp_dir:
+            temp_root = Path(temp_dir)
+            with ZipFile(
+                destination,
+                "w",
+                compression=ZIP_DEFLATED,
+                compresslevel=1,
+                allowZip64=True,
+            ) as combined:
+                for archive_index, component in enumerate(responses, start=1):
+                    component_name = (
+                        component.get("file_name")
+                        or component.get("filename")
+                        or f"component_{archive_index:02d}.zip"
+                    )
+                    component_path = temp_root / f"{archive_index:04d}_{Path(component_name).name}"
+                    self.download_completed(component, component_path)
+                    with ZipFile(component_path) as source:
+                        for member_index, member in enumerate(source.infolist(), start=1):
+                            if member.is_dir():
+                                continue
+                            safe_name = Path(member.filename).name
+                            if not safe_name:
+                                continue
+                            combined_name = (
+                                f"component_{archive_index:04d}/"
+                                f"{member_index:04d}_{safe_name}"
+                            )
+                            with source.open(member) as source_file, combined.open(
+                                combined_name,
+                                "w",
+                                force_zip64=True,
+                            ) as target_file:
+                                shutil.copyfileobj(source_file, target_file, length=1024 * 1024)
+        return destination
+
     def download_completed(self, response: dict, destination: Path) -> Path:
+        split_responses = response.get("split_responses") or []
+        if split_responses:
+            return self._combine_split_archives(split_responses, destination)
+
         state = str(response.get("status") or response.get("state") or "").lower()
         if state and state not in TERMINAL_SUCCESS_STATES:
             raise RuntimeError(
