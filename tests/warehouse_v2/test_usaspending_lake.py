@@ -209,3 +209,67 @@ def test_verified_product_file_c_relaxed_csv_fails_closed_on_row_count_mismatch(
             transport_metadata=_verified_file_c_transport(2),
             lake=LakeStore(root=tmp_path / "lake"),
         )
+
+
+
+def test_verified_product_file_c_filters_only_impossible_account_fragments_before_reconciliation(
+    db_session, tmp_path
+) -> None:
+    seed_catalog(db_session)
+    archive_path = tmp_path / "FY2025_All_FA_Product_FileC_fragments.zip"
+    header = [
+        "federal_account_symbol",
+        "gross_outlay_amount_FYB_to_period_end",
+        "award_unique_key",
+        "award_id_piid",
+        "award_id_fain",
+        "award_id_uri",
+        "recipient_name",
+        "recipient_name_raw",
+        "recipient_uei",
+        "prime_award_base_transaction_description",
+        "awarding_agency_name",
+        "funding_agency_name",
+        "award_type",
+        "usaspending_permalink",
+    ]
+    with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "AwardFinancial_1.csv",
+            ",".join(header)
+            + "\n"
+            + "012-3456,10.00,AWARD-1,PIID-1,,,,,,,,,,\n"
+            + "continued description fragment,with,only,four columns\n"
+            + "097-0400,20.00,AWARD-2,PIID-2,,,,,,,,,,\n",
+        )
+
+    lake = LakeStore(root=tmp_path / "lake")
+    result = materialize_account_archive(
+        db_session,
+        archive_path,
+        fiscal_year=2025,
+        request={
+            "account_level": "federal_account",
+            "file_format": "csv",
+            "filters": {
+                "agency": "all",
+                "fy": "2025",
+                "period": "12",
+                "submission_types": ["award_financial"],
+            },
+        },
+        transport_metadata=_verified_file_c_transport(2),
+        lake=lake,
+    )
+
+    assert result["submission_files"]["C"]["rows"] == 2
+    object_key = result["submission_files"]["C"]["parquet_objects"][0]
+    connection = duckdb.connect()
+    try:
+        accounts = connection.execute(
+            "SELECT federal_account_symbol FROM read_parquet(?) ORDER BY federal_account_symbol",
+            [str(tmp_path / "lake" / object_key)],
+        ).fetchall()
+    finally:
+        connection.close()
+    assert accounts == [("012-3456",), ("097-0400",)]

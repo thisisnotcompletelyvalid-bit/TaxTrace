@@ -29,6 +29,10 @@ def _duckdb_sql_literal(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
 
+def _duckdb_identifier(value: str) -> str:
+    return '"' + value.replace('"', '""') + '"'
+
+
 class LakeStore:
     """Filesystem/object-store-shaped lake for raw and high-cardinality normalized data."""
 
@@ -108,6 +112,8 @@ class LakeStore:
         delimiter: str = ",",
         strict_mode: bool = True,
         null_padding: bool = False,
+        required_key_column: str | None = None,
+        required_key_regex: str | None = None,
     ) -> int:
         """Normalize a huge delimited file to compressed Parquet with DuckDB streaming through disk.
 
@@ -120,6 +126,10 @@ class LakeStore:
             raise RuntimeError("duckdb is required for CSV-to-Parquet lake materialization") from exc
         if len(delimiter) != 1:
             raise ValueError("delimiter must be exactly one character")
+        if (required_key_column is None) != (required_key_regex is None):
+            raise ValueError(
+                "required_key_column and required_key_regex must be supplied together"
+            )
         destination.parent.mkdir(parents=True, exist_ok=True)
         source_sql = _duckdb_sql_literal(source)
         destination_sql = _duckdb_sql_literal(destination)
@@ -129,11 +139,21 @@ class LakeStore:
             strict_sql = "true" if strict_mode else "false"
             null_padding_sql = "true" if null_padding else "false"
             parallel_sql = "false" if null_padding else "true"
-            connection.execute(
-                "COPY (SELECT * FROM read_csv_auto("
+            source_query = (
+                "SELECT * FROM read_csv_auto("
                 f"{source_sql}, header=true, delim={delimiter_sql}, all_varchar=true, sample_size=-1, "
                 f"strict_mode={strict_sql}, null_padding={null_padding_sql}, parallel={parallel_sql}"
-                f")) TO {destination_sql} (FORMAT PARQUET, COMPRESSION ZSTD)"
+                ")"
+            )
+            if required_key_column is not None and required_key_regex is not None:
+                key_sql = _duckdb_identifier(required_key_column)
+                regex_sql = _duckdb_sql_literal(required_key_regex)
+                source_query += (
+                    f" WHERE regexp_full_match(trim(CAST({key_sql} AS VARCHAR)), {regex_sql})"
+                )
+            connection.execute(
+                f"COPY ({source_query}) TO {destination_sql} "
+                "(FORMAT PARQUET, COMPRESSION ZSTD)"
             )
             return int(
                 connection.execute(

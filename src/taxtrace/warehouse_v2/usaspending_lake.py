@@ -223,6 +223,8 @@ def materialize_account_archive(
                     delimiter="\t" if suffix == ".tsv" else ",",
                     strict_mode=not relaxed_csv,
                     null_padding=relaxed_csv,
+                    required_key_column=("federal_account_symbol" if relaxed_csv else None),
+                    required_key_regex=(r"[0-9]{3}-[0-9]{4}" if relaxed_csv else None),
                 )
                 extracted.unlink(missing_ok=True)
 
@@ -246,6 +248,11 @@ def materialize_account_archive(
                             "relaxed_structural_with_exact_release_row_reconciliation"
                             if relaxed_csv
                             else "strict"
+                        ),
+                        "parser_artifact_filter": (
+                            "federal_account_symbol:[0-9]{3}-[0-9]{4}"
+                            if relaxed_csv
+                            else None
                         ),
                     },
                 )
