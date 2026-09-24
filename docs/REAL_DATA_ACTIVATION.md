@@ -74,7 +74,8 @@ The federal product-data workflow starts from a clean PostgreSQL database and re
 - current real Treasury controls;
 - real OMB account rows;
 - full-year period-12 USAspending account detail;
-- physically present File B/File C Parquet;
+- physically present File A/File B/File C Parquet;
+- passing FY2025 measured counts of 8,979 File A rows, 148,206 File B rows, and 39,777,645 File C rows across 42 File C Parquet objects;
 - a Federal Product V2 receipt with READY full-year warehouse coverage;
 - at least one OMB account matched to File B detail;
 - nontrivial program/activity/object children;
@@ -88,7 +89,9 @@ Files A and B are requested at **Treasury Account** level because their native a
 
 The FY2025 live probe that motivated this contract is concrete: Treasury's period-12 TAS-level File C request repeatedly failed during generation, while the equivalent Federal Account File C request completed successfully with 104,154 rows across contract, assistance, and unlinked members.
 
-Federal Account File C can still be too large as one all-agency generator job, so its transport may be sharded across the exact set of agencies with current-period submissions. TaxTrace joins that reporting universe to USAspending's numeric top-tier agency identifiers, submits every shard, requires every shard to reach terminal success, and combines the official archives locally. Missing or failed shards fail the activation rather than degrading coverage.
+The original production transport sharded File C across the exact current-period reporting-agency universe, but repeated upstream generator failures made clean deployment activation depend on more than one hundred asynchronous jobs. TaxTrace now prefers a versioned, independently verified official completed-year release when one exists. For FY2025/P12, the pinned USAspending all-agency Federal Account File C archive was generated from the exact 14 product-required columns, reached terminal `finished`, and was independently downloaded and inspected. It contains 39,777,645 logical rows across 42 CSV members. TaxTrace canonicalizes those CSV members serially, checks the total parsed row count against USAspending's official generator count, and materializes 42 local Parquet objects.
+
+The logical source request remains Federal Account × award, FY2025/P12, all agencies. The pinned archive is only the physical transport. Exact request provenance and transport provenance are stored separately. Periods without a pinned verified product release retain the conservative agency-sharded path, where every current-period agency must succeed or activation fails closed.
 
 These transport choices never make A, B, and C additive. Each logical release stores the exact fiscal-year/period-12 request that generated its source grain, and the personalized accounting hierarchy remains OMB-controlled.
 

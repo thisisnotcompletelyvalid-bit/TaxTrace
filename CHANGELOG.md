@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.1 — 2026-09-21
+## 0.7.1 — 2026-09-23
 
 Made the real national data path an explicit product/deployment concern rather than an implicit manual prerequisite:
 
@@ -15,8 +15,8 @@ Made the real national data path an explicit product/deployment concern rather t
 - retained Treasury receipt/outlay totals only as non-additive controls and fail closed if source detail does not reproduce them exactly;
 - fixed current Typer CLI compatibility so top-level and federal-data commands construct correctly with the installed Typer version;
 - added resilient USAspending account activation with explicit product grains: File A/B remain Treasury Account-level while File C is requested at Federal Account × award grain, matching the conservative federal-account award projection;
-- added complete File C agency transport over the current reporting universe, preserving A/B/C as separate non-additive datasets and retaining each logical release's fiscal-year, reporting-period, and account-level provenance;
-- added a federal real-source release gate requiring current Treasury/OMB controls, full-year USAspending File B/C detail, local Parquet availability, substantive File B account matching, and exact Federal Product V2 receipt conservation;
+- replaced fragile per-deployment full-year File C regeneration with a pinned, independently verified official USAspending FY2025/P12 all-agency product release while retaining fail-closed agency-sharded generation for periods without a verified release;
+- added a federal real-source release gate requiring current Treasury/OMB controls, full-year USAspending File A/B/C detail, local Parquet availability, substantive File B account matching, and exact Federal Product V2 receipt conservation; the passing FY2025 gate measured 8,979 File A rows, 148,206 File B rows, 39,777,645 File C rows across 42 Parquet objects, 1,210 OMB/File B matches, and a $0.00 conservation difference;
 - expanded regression coverage for Treasury MTS controls, CLI construction, deployment readiness, split USAspending polling, and streaming ZIP composition.
 
 This release does **not** change tax calculation or allocation semantics. Methodology therefore remains **1.4.0**, while the application advances to **0.7.1**.

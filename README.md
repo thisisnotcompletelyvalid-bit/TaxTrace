@@ -155,7 +155,7 @@ The initializer can populate the national Census registry/finance baseline, real
 
 The standard Docker Compose stack includes the same one-shot initializer before the API. Database, raw-data, and warehouse-lake locations must use persistent storage if the populated deployment is expected to survive container recreation.
 
-Full-year USAspending activation uses two explicit product source grains: File A/B remain Treasury Account-level, while File C is requested at Federal Account × award grain because TaxTrace's conservative award projection is controlled at the federal-account level. File C may be transport-sharded across the exact current reporting-agency universe, but every shard must succeed. Each logical release retains its own fiscal-year/period-12 request provenance, and A/B/C remain non-additive.
+Full-year USAspending activation uses two explicit product source grains: File A/B remain Treasury Account-level, while File C is requested at Federal Account × award grain because TaxTrace's conservative award projection is controlled at the federal-account level. For FY2025/P12, File C now consumes a pinned, independently verified official USAspending all-agency archive generated with the exact 14 columns the product needs. The verified release contains 39,777,645 rows across 42 CSV members and is materialized as 42 local Parquet objects. Periods without a pinned verified product release retain the fail-closed current-reporting-agency generation path. Each logical release retains its own fiscal-year/period-12 request provenance, and A/B/C remain non-additive.
 
 See `docs/REAL_DATA_ACTIVATION.md` and `docs/DATA_SOURCES.md` for the deployment and source contracts.
 
@@ -268,7 +268,7 @@ The dedicated Census taxonomy validation downloads current official controls and
 
 The **Product Data Activation Live Validation** gate starts from a clean PostgreSQL database, imports the real national Census sources, requires the validated national scale, and exercises a real government's additive partition.
 
-The **Federal Product Data Live Validation** gate starts from a clean PostgreSQL database, ingests current real Treasury and OMB sources, materializes full-year USAspending account data, and requires a substantive File B-backed Federal Product V2 receipt with exact conservation.
+The **Federal Product Data Live Validation** gate starts from a clean PostgreSQL database, ingests current real Treasury and OMB sources, materializes full-year USAspending account data, and requires a substantive File B-backed Federal Product V2 receipt with exact conservation. The verified FY2025 gate materialized 8,979 File A rows, 148,206 File B rows, and 39,777,645 File C rows; 1,210 OMB accounts matched File B, and the sample receipt conserved to $0.00.
 
 These real-source gates are separate from fixture tests. A fixture-scale database cannot satisfy the product-readiness release contract.
 
