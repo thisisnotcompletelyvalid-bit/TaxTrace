@@ -293,6 +293,7 @@ def materialize_account_archive(
                         delimiter=delimiter,
                         strict_mode=True,
                         null_padding=False,
+                        parallel=False if canonical_csv else None,
                     )
                     if canonical_rows is not None and row_count != canonical_rows:
                         raise RuntimeError(

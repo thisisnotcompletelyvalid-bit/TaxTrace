@@ -112,6 +112,7 @@ class LakeStore:
         delimiter: str = ",",
         strict_mode: bool = True,
         null_padding: bool = False,
+        parallel: bool | None = None,
         required_key_column: str | None = None,
         required_key_regex: str | None = None,
     ) -> int:
@@ -138,7 +139,10 @@ class LakeStore:
         try:
             strict_sql = "true" if strict_mode else "false"
             null_padding_sql = "true" if null_padding else "false"
-            parallel_sql = "false" if null_padding else "true"
+            if parallel is None:
+                parallel_sql = "false" if null_padding else "true"
+            else:
+                parallel_sql = "true" if parallel else "false"
             source_query = (
                 "SELECT * FROM read_csv_auto("
                 f"{source_sql}, header=true, delim={delimiter_sql}, all_varchar=true, sample_size=-1, "
