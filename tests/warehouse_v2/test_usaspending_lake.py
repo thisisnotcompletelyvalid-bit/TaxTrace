@@ -1,3 +1,5 @@
+import csv
+import io
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -15,6 +17,14 @@ from taxtrace.warehouse_v2.usaspending_lake import (
 
 def _csv(header: list[str], row: list[str]) -> str:
     return ",".join(header) + "\n" + ",".join(row) + "\n"
+
+
+def _csv_records(header: list[str], rows: list[list[str]]) -> str:
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream, lineterminator="\n")
+    writer.writerow(header)
+    writer.writerows(rows)
+    return stream.getvalue()
 
 
 def test_classify_usaspending_account_grains():
@@ -122,7 +132,7 @@ def _verified_file_c_transport(total_rows: int) -> dict:
     }
 
 
-def test_verified_product_file_c_relaxed_csv_preserves_short_structural_row(
+def test_verified_product_file_c_python_csv_canonicalization_preserves_multiline_records(
     db_session, tmp_path
 ) -> None:
     seed_catalog(db_session)
@@ -143,15 +153,42 @@ def test_verified_product_file_c_relaxed_csv_preserves_short_structural_row(
         "award_type",
         "usaspending_permalink",
     ]
+    rows = [
+        [
+            "012-3456",
+            "10.00",
+            "AWARD-1",
+            "PIID-1",
+            "",
+            "",
+            "Recipient One",
+            "Recipient One",
+            "UEI-1",
+            "First line\nSecond line, with a comma",
+            "Agency",
+            "Agency",
+            "Contract",
+            "https://example.test/award-1",
+        ],
+        [
+            "097-0400",
+            "20.00",
+            "AWARD-2",
+            "PIID-2",
+            "FAIN-2",
+            "URI-2",
+            "Recipient Two",
+            "Recipient Two",
+            "UEI-2",
+            "Description",
+            "Awarding",
+            "Funding",
+            "Contract",
+            "https://example.test/award-2",
+        ],
+    ]
     with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "AwardFinancial_1.csv",
-            ",".join(header)
-            + "\n"
-            + "012-3456,10.00,AWARD-1,PIID-1\n"
-            + "012-3456,20.00,AWARD-2,PIID-2,FAIN-2,URI-2,Recipient,Recipient,UEI,"
-            + "Description,Awarding,Funding,Contract,https://example.test/award-2\n",
-        )
+        archive.writestr("AwardFinancial_1.csv", _csv_records(header, rows))
 
     lake = LakeStore(root=tmp_path / "lake")
     result = materialize_account_archive(
@@ -161,7 +198,12 @@ def test_verified_product_file_c_relaxed_csv_preserves_short_structural_row(
         request={
             "account_level": "federal_account",
             "file_format": "csv",
-            "filters": {"agency": "all", "fy": "2025", "period": "12", "submission_types": ["award_financial"]},
+            "filters": {
+                "agency": "all",
+                "fy": "2025",
+                "period": "12",
+                "submission_types": ["award_financial"],
+            },
         },
         transport_metadata=_verified_file_c_transport(2),
         lake=lake,
@@ -172,19 +214,26 @@ def test_verified_product_file_c_relaxed_csv_preserves_short_structural_row(
     parquet = tmp_path / "lake" / object_key
     connection = duckdb.connect()
     try:
-        rows = connection.execute(
-            "SELECT award_unique_key, usaspending_permalink FROM read_parquet(?) ORDER BY award_unique_key",
+        observed = connection.execute(
+            """
+            SELECT award_unique_key, prime_award_base_transaction_description, usaspending_permalink
+            FROM read_parquet(?)
+            ORDER BY award_unique_key
+            """,
             [str(parquet)],
         ).fetchall()
     finally:
         connection.close()
-    assert rows == [
-        ("AWARD-1", None),
-        ("AWARD-2", "https://example.test/award-2"),
+    assert observed == [
+        (
+            "AWARD-1",
+            "First line\nSecond line, with a comma",
+            "https://example.test/award-1",
+        ),
+        ("AWARD-2", "Description", "https://example.test/award-2"),
     ]
 
-
-def test_verified_product_file_c_relaxed_csv_fails_closed_on_row_count_mismatch(
+def test_verified_product_file_c_canonical_csv_fails_closed_on_row_count_mismatch(
     db_session, tmp_path
 ) -> None:
     seed_catalog(db_session)
@@ -212,7 +261,7 @@ def test_verified_product_file_c_relaxed_csv_fails_closed_on_row_count_mismatch(
 
 
 
-def test_verified_product_file_c_filters_only_impossible_account_fragments_before_reconciliation(
+def test_verified_product_file_c_canonical_csv_fails_closed_on_structural_fragment(
     db_session, tmp_path
 ) -> None:
     seed_catalog(db_session)
@@ -243,33 +292,21 @@ def test_verified_product_file_c_filters_only_impossible_account_fragments_befor
             + "097-0400,20.00,AWARD-2,PIID-2,,,,,,,,,,\n",
         )
 
-    lake = LakeStore(root=tmp_path / "lake")
-    result = materialize_account_archive(
-        db_session,
-        archive_path,
-        fiscal_year=2025,
-        request={
-            "account_level": "federal_account",
-            "file_format": "csv",
-            "filters": {
-                "agency": "all",
-                "fy": "2025",
-                "period": "12",
-                "submission_types": ["award_financial"],
+    with pytest.raises(RuntimeError, match="columns; expected"):
+        materialize_account_archive(
+            db_session,
+            archive_path,
+            fiscal_year=2025,
+            request={
+                "account_level": "federal_account",
+                "file_format": "csv",
+                "filters": {
+                    "agency": "all",
+                    "fy": "2025",
+                    "period": "12",
+                    "submission_types": ["award_financial"],
+                },
             },
-        },
-        transport_metadata=_verified_file_c_transport(2),
-        lake=lake,
-    )
-
-    assert result["submission_files"]["C"]["rows"] == 2
-    object_key = result["submission_files"]["C"]["parquet_objects"][0]
-    connection = duckdb.connect()
-    try:
-        accounts = connection.execute(
-            "SELECT federal_account_symbol FROM read_parquet(?) ORDER BY federal_account_symbol",
-            [str(tmp_path / "lake" / object_key)],
-        ).fetchall()
-    finally:
-        connection.close()
-    assert accounts == [("012-3456",), ("097-0400",)]
+            transport_metadata=_verified_file_c_transport(2),
+            lake=LakeStore(root=tmp_path / "lake"),
+        )

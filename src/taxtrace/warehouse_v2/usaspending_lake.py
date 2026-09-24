@@ -29,7 +29,7 @@ SUBMISSION_DATASETS = {
 }
 
 
-def _uses_verified_file_c_relaxed_csv(transport_metadata: dict | None) -> bool:
+def _uses_verified_file_c_canonical_csv(transport_metadata: dict | None) -> bool:
     return (
         (transport_metadata or {}).get("transport_strategy")
         == "all_agency_product_column_projection"
@@ -48,6 +48,59 @@ def _expected_transport_rows(transport_metadata: dict | None) -> int | None:
         except (TypeError, ValueError) as exc:
             raise RuntimeError("USAspending transport metadata contains an invalid row count") from exc
     return sum(counts) if counts else None
+
+
+def _canonicalize_verified_file_c_member(
+    source: Path,
+    destination: Path,
+    *,
+    expected_columns: tuple[str, ...],
+    delimiter: str,
+) -> int:
+    """Round-trip one verified File C member through Python's RFC-style CSV parser.
+
+    USAspending's large projected File C archive contains quoted multiline descriptions that
+    DuckDB's relaxed CSV scanner can split into synthetic rows. Python's csv reader reconstructs
+    those logical records correctly. Re-serializing one member at a time gives DuckDB a canonical,
+    strictly parseable CSV while bounding disk usage and preserving every source field.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    count = 0
+    with source.open("r", encoding="utf-8-sig", newline="") as source_handle, destination.open(
+        "w", encoding="utf-8", newline=""
+    ) as target_handle:
+        reader = csv.reader(source_handle, delimiter=delimiter)
+        writer = csv.writer(target_handle, delimiter=delimiter, lineterminator="\n")
+        try:
+            header = next(reader)
+        except StopIteration as exc:
+            raise RuntimeError(f"USAspending File C member {source.name} is empty") from exc
+        except csv.Error as exc:
+            raise RuntimeError(
+                f"USAspending File C member {source.name} header is not valid CSV"
+            ) from exc
+
+        if tuple(header) != expected_columns:
+            raise RuntimeError(
+                f"USAspending File C member {source.name} header changed during canonicalization"
+            )
+        writer.writerow(header)
+
+        try:
+            for row in reader:
+                count += 1
+                if len(row) != len(header):
+                    raise RuntimeError(
+                        f"USAspending File C member {source.name} logical row {count} has "
+                        f"{len(row)} columns; expected {len(header)}"
+                    )
+                writer.writerow(row)
+        except csv.Error as exc:
+            raise RuntimeError(
+                f"USAspending File C member {source.name} contains malformed CSV near "
+                f"physical line {reader.line_num}"
+            ) from exc
+    return count
 
 
 def classify_account_columns(columns: list[str] | tuple[str, ...]) -> str:
@@ -178,13 +231,13 @@ def materialize_account_archive(
     session.commit()
 
     results: dict[str, dict[str, object]] = {}
-    relaxed_verified_file_c = _uses_verified_file_c_relaxed_csv(transport_metadata)
+    canonical_verified_file_c = _uses_verified_file_c_canonical_csv(transport_metadata)
     expected_transport_rows = _expected_transport_rows(transport_metadata)
     with ZipFile(zip_path) as archive:
         for submission_type, members in by_type.items():
             dataset_key = SUBMISSION_DATASETS[submission_type]
             release = releases[submission_type]
-            relaxed_csv = submission_type == "C" and relaxed_verified_file_c
+            canonical_csv = submission_type == "C" and canonical_verified_file_c
             raw_object = lake.register_file(
                 session,
                 dataset_release_id=release.id,
@@ -217,16 +270,40 @@ def materialize_account_archive(
                     "normalized",
                     f"file_{submission_type}_{part_number:04d}.parquet",
                 )
-                row_count = lake.csv_to_parquet(
-                    extracted,
-                    parquet,
-                    delimiter="\t" if suffix == ".tsv" else ",",
-                    strict_mode=not relaxed_csv,
-                    null_padding=relaxed_csv,
-                    required_key_column=("federal_account_symbol" if relaxed_csv else None),
-                    required_key_regex=(r"[0-9]{3}-[0-9]{4}" if relaxed_csv else None),
-                )
-                extracted.unlink(missing_ok=True)
+                delimiter = "\t" if suffix == ".tsv" else ","
+                canonical = None
+                canonical_rows = None
+                parquet_source = extracted
+                if canonical_csv:
+                    canonical = extracted.with_name(
+                        f"{extracted.stem}.canonical{extracted.suffix}"
+                    )
+                    canonical_rows = _canonicalize_verified_file_c_member(
+                        extracted,
+                        canonical,
+                        expected_columns=member.columns,
+                        delimiter=delimiter,
+                    )
+                    parquet_source = canonical
+
+                try:
+                    row_count = lake.csv_to_parquet(
+                        parquet_source,
+                        parquet,
+                        delimiter=delimiter,
+                        strict_mode=True,
+                        null_padding=False,
+                    )
+                    if canonical_rows is not None and row_count != canonical_rows:
+                        raise RuntimeError(
+                            f"Verified File C member {member.member_name} changed row count "
+                            f"during strict Parquet conversion: canonical={canonical_rows} "
+                            f"parquet={row_count}"
+                        )
+                finally:
+                    extracted.unlink(missing_ok=True)
+                    if canonical is not None:
+                        canonical.unlink(missing_ok=True)
 
                 bulk = lake.register_file(
                     session,
@@ -245,24 +322,20 @@ def materialize_account_archive(
                         "columns": list(member.columns),
                         "grain_is_additive_with_other_submission_files": False,
                         "csv_parser_mode": (
-                            "relaxed_structural_with_exact_release_row_reconciliation"
-                            if relaxed_csv
+                            "python_csv_canonicalization_then_strict_duckdb"
+                            if canonical_csv
                             else "strict"
                         ),
-                        "parser_artifact_filter": (
-                            "federal_account_symbol:[0-9]{3}-[0-9]{4}"
-                            if relaxed_csv
-                            else None
-                        ),
+                        "canonical_csv_rows": canonical_rows,
                     },
                 )
                 total_rows += row_count
                 parquet_objects.append(bulk.object_key)
 
-            if relaxed_csv:
+            if canonical_csv:
                 if expected_transport_rows is None:
                     raise RuntimeError(
-                        "Verified File C relaxed CSV parsing requires an independent "
+                        "Verified File C canonical CSV parsing requires an independent "
                         "official transport row count"
                     )
                 if total_rows != expected_transport_rows:
@@ -289,12 +362,12 @@ def materialize_account_archive(
                     "parquet_objects": parquet_objects,
                     "grain_is_additive_with_other_submission_files": False,
                     "csv_parser_mode": (
-                        "relaxed_structural_with_exact_release_row_reconciliation"
-                        if relaxed_csv
+                        "python_csv_canonicalization_then_strict_duckdb"
+                        if canonical_csv
                         else "strict"
                     ),
                     "official_transport_row_count": (
-                        expected_transport_rows if relaxed_csv else None
+                        expected_transport_rows if canonical_csv else None
                     ),
                 }
             )
