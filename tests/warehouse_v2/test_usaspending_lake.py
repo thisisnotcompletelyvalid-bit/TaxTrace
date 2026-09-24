@@ -2,6 +2,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import duckdb
+import pytest
 
 from taxtrace.warehouse_v2.catalog import seed_catalog
 from taxtrace.warehouse_v2.lake import LakeStore
@@ -103,3 +104,108 @@ def test_materialize_usaspending_account_archive(db_session, tmp_path):
             ).fetchone()[0] == 1
         finally:
             connection.close()
+
+
+
+def _verified_file_c_transport(total_rows: int) -> dict:
+    return {
+        "transport_strategy": "all_agency_product_column_projection",
+        "components": [
+            {
+                "status": "finished",
+                "total_rows": total_rows,
+                "total_columns": 42,
+                "transport_source": "pinned_verified_official_generated_archive",
+                "verified_source_grain": "federal_account_award",
+            }
+        ],
+    }
+
+
+def test_verified_product_file_c_relaxed_csv_preserves_short_structural_row(
+    db_session, tmp_path
+) -> None:
+    seed_catalog(db_session)
+    archive_path = tmp_path / "FY2025_All_FA_Product_FileC.zip"
+    header = [
+        "federal_account_symbol",
+        "gross_outlay_amount_FYB_to_period_end",
+        "award_unique_key",
+        "award_id_piid",
+        "award_id_fain",
+        "award_id_uri",
+        "recipient_name",
+        "recipient_name_raw",
+        "recipient_uei",
+        "prime_award_base_transaction_description",
+        "awarding_agency_name",
+        "funding_agency_name",
+        "award_type",
+        "usaspending_permalink",
+    ]
+    with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "AwardFinancial_1.csv",
+            ",".join(header)
+            + "\n"
+            + "012-3456,10.00,AWARD-1,PIID-1\n"
+            + "012-3456,20.00,AWARD-2,PIID-2,FAIN-2,URI-2,Recipient,Recipient,UEI,"
+            + "Description,Awarding,Funding,Contract,https://example.test/award-2\n",
+        )
+
+    lake = LakeStore(root=tmp_path / "lake")
+    result = materialize_account_archive(
+        db_session,
+        archive_path,
+        fiscal_year=2025,
+        request={
+            "account_level": "federal_account",
+            "file_format": "csv",
+            "filters": {"agency": "all", "fy": "2025", "period": "12", "submission_types": ["award_financial"]},
+        },
+        transport_metadata=_verified_file_c_transport(2),
+        lake=lake,
+    )
+
+    assert result["submission_files"]["C"]["rows"] == 2
+    object_key = result["submission_files"]["C"]["parquet_objects"][0]
+    parquet = tmp_path / "lake" / object_key
+    connection = duckdb.connect()
+    try:
+        rows = connection.execute(
+            "SELECT award_unique_key, usaspending_permalink FROM read_parquet(?) ORDER BY award_unique_key",
+            [str(parquet)],
+        ).fetchall()
+    finally:
+        connection.close()
+    assert rows == [
+        ("AWARD-1", None),
+        ("AWARD-2", "https://example.test/award-2"),
+    ]
+
+
+def test_verified_product_file_c_relaxed_csv_fails_closed_on_row_count_mismatch(
+    db_session, tmp_path
+) -> None:
+    seed_catalog(db_session)
+    archive_path = tmp_path / "FY2025_All_FA_Product_FileC_bad_count.zip"
+    with ZipFile(archive_path, "w", ZIP_DEFLATED) as archive:
+        archive.writestr(
+            "AwardFinancial_1.csv",
+            "federal_account_symbol,gross_outlay_amount_FYB_to_period_end,award_unique_key\n"
+            "012-3456,10.00,AWARD-1\n",
+        )
+
+    with pytest.raises(RuntimeError, match="parsed row count does not match"):
+        materialize_account_archive(
+            db_session,
+            archive_path,
+            fiscal_year=2025,
+            request={
+                "account_level": "federal_account",
+                "file_format": "csv",
+                "filters": {"agency": "all", "fy": "2025", "period": "12", "submission_types": ["award_financial"]},
+            },
+            transport_metadata=_verified_file_c_transport(2),
+            lake=LakeStore(root=tmp_path / "lake"),
+        )

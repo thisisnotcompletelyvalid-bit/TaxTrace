@@ -29,6 +29,27 @@ SUBMISSION_DATASETS = {
 }
 
 
+def _uses_verified_file_c_relaxed_csv(transport_metadata: dict | None) -> bool:
+    return (
+        (transport_metadata or {}).get("transport_strategy")
+        == "all_agency_product_column_projection"
+    )
+
+
+def _expected_transport_rows(transport_metadata: dict | None) -> int | None:
+    components = (transport_metadata or {}).get("components") or []
+    counts: list[int] = []
+    for component in components:
+        raw = component.get("total_rows")
+        if raw is None:
+            continue
+        try:
+            counts.append(int(raw))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("USAspending transport metadata contains an invalid row count") from exc
+    return sum(counts) if counts else None
+
+
 def classify_account_columns(columns: list[str] | tuple[str, ...]) -> str:
     normalized = {str(column).strip().lower() for column in columns}
     if "financial_accounts_by_awards_id" in normalized or "award_unique_key" in normalized:
@@ -157,10 +178,13 @@ def materialize_account_archive(
     session.commit()
 
     results: dict[str, dict[str, object]] = {}
+    relaxed_verified_file_c = _uses_verified_file_c_relaxed_csv(transport_metadata)
+    expected_transport_rows = _expected_transport_rows(transport_metadata)
     with ZipFile(zip_path) as archive:
         for submission_type, members in by_type.items():
             dataset_key = SUBMISSION_DATASETS[submission_type]
             release = releases[submission_type]
+            relaxed_csv = submission_type == "C" and relaxed_verified_file_c
             raw_object = lake.register_file(
                 session,
                 dataset_release_id=release.id,
@@ -197,6 +221,8 @@ def materialize_account_archive(
                     extracted,
                     parquet,
                     delimiter="\t" if suffix == ".tsv" else ",",
+                    strict_mode=not relaxed_csv,
+                    null_padding=relaxed_csv,
                 )
                 extracted.unlink(missing_ok=True)
 
@@ -216,10 +242,28 @@ def materialize_account_archive(
                         "source_member": member.member_name,
                         "columns": list(member.columns),
                         "grain_is_additive_with_other_submission_files": False,
+                        "csv_parser_mode": (
+                            "relaxed_structural_with_exact_release_row_reconciliation"
+                            if relaxed_csv
+                            else "strict"
+                        ),
                     },
                 )
                 total_rows += row_count
                 parquet_objects.append(bulk.object_key)
+
+            if relaxed_csv:
+                if expected_transport_rows is None:
+                    raise RuntimeError(
+                        "Verified File C relaxed CSV parsing requires an independent "
+                        "official transport row count"
+                    )
+                if total_rows != expected_transport_rows:
+                    raise RuntimeError(
+                        "Verified File C parsed row count does not match the official "
+                        f"USAspending generator count: parsed={total_rows} "
+                        f"official={expected_transport_rows}"
+                    )
 
             release.status = "READY"
             release.row_count = total_rows
@@ -237,6 +281,14 @@ def materialize_account_archive(
                     "source_members": [member.member_name for member in members],
                     "parquet_objects": parquet_objects,
                     "grain_is_additive_with_other_submission_files": False,
+                    "csv_parser_mode": (
+                        "relaxed_structural_with_exact_release_row_reconciliation"
+                        if relaxed_csv
+                        else "strict"
+                    ),
+                    "official_transport_row_count": (
+                        expected_transport_rows if relaxed_csv else None
+                    ),
                 }
             )
             release.metadata_json = metadata

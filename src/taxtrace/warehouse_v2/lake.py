@@ -106,8 +106,14 @@ class LakeStore:
         destination: Path,
         *,
         delimiter: str = ",",
+        strict_mode: bool = True,
+        null_padding: bool = False,
     ) -> int:
-        """Normalize a huge delimited file to compressed Parquet with DuckDB streaming through disk."""
+        """Normalize a huge delimited file to compressed Parquet with DuckDB streaming through disk.
+
+        Strict parsing remains the default. Structural relaxation is an explicit source-specific
+        escape hatch and must be paired by the caller with an independent completeness check.
+        """
         try:
             import duckdb
         except ImportError as exc:  # pragma: no cover - dependency error is operational
@@ -120,9 +126,12 @@ class LakeStore:
         delimiter_sql = _duckdb_sql_literal(delimiter)
         connection = duckdb.connect()
         try:
+            strict_sql = "true" if strict_mode else "false"
+            null_padding_sql = "true" if null_padding else "false"
             connection.execute(
                 "COPY (SELECT * FROM read_csv_auto("
-                f"{source_sql}, header=true, delim={delimiter_sql}, all_varchar=true, sample_size=-1"
+                f"{source_sql}, header=true, delim={delimiter_sql}, all_varchar=true, sample_size=-1, "
+                f"strict_mode={strict_sql}, null_padding={null_padding_sql}"
                 f")) TO {destination_sql} (FORMAT PARQUET, COMPRESSION ZSTD)"
             )
             return int(
