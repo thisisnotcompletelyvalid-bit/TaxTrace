@@ -16,6 +16,7 @@ on:
       - 'src/taxtrace/warehouse_v2/usaspending_accounts.py'
       - 'src/taxtrace/data/source_catalog_v2.json'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
+      - 'src/taxtrace/warehouse_v2/lake.py'
       - 'src/taxtrace/warehouse_v2/federal_receipt.py'
   pull_request:
     branches:
@@ -32,6 +33,7 @@ on:
       - 'src/taxtrace/warehouse_v2/usaspending_accounts.py'
       - 'src/taxtrace/data/source_catalog_v2.json'
       - 'src/taxtrace/warehouse_v2/usaspending_lake.py'
+      - 'src/taxtrace/warehouse_v2/lake.py'
       - 'src/taxtrace/warehouse_v2/federal_receipt.py'
   workflow_dispatch:
 
